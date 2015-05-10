@@ -5,7 +5,8 @@ import youtube_dl
 import SmashCVCore
 
 # Youtube options
-ytVideoID = '3tai70AIoe4'
+#ytVideoID = '3tai70AIoe4'
+ytVideoID = 'jcsKByup_Tw'
 ytVideoPath = 'videos/%s.mp4'
 ytOptions = {
 	'format': '132/133/135/mp4[acodec=none][height=240]/mp4[acodec=none][height<=360]',
