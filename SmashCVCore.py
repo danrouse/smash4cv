@@ -26,13 +26,15 @@ except IOError:
 # Does making them constants remove the magic?
 # I just want to believe
 MATCH_THRESHOLD = 0.75
-PERCENT_MATCH_THRESHOLD = 0.6
+MATCH_THRESHOLD_ZERO = 0.65
+MATCH_THRESHOLD_PCT = 0.6
 PCT_X_TWO_DIGITS = 5
 PCT_X_THREE_DIGITS = 10
-CROP_DAMAGE = (1, -3, -13, 15)
+CROP_DAMAGE = (1, -2, -13, 15)
 CROP_DIGIT = (2, 0)
 DIGIT_WIDTH = 10
 FRAME_TIMEOUT = 200
+OCR_CONF_THRESHOLD = 350000
 
 # State
 STATE_CALIBRATE = 1
@@ -107,7 +109,7 @@ def calibrate_frame(src_im):
 		else:
 			# Look for "0%" for in-game initialization
 			t_c = dt()
-			g_matches = filtered_match(im_gray, tpl_zero, MATCH_THRESHOLD, True, 3)
+			g_matches = filtered_match(im_gray, tpl_zero, MATCH_THRESHOLD_ZERO, True, 3)
 			dt('mt zero', t_c)
 			if(len(g_matches) > 1):
 				state = STATE_INGAME
@@ -116,7 +118,7 @@ def calibrate_frame(src_im):
 	dt('calibrate', tick)
 	return state, results
 
-def read_digits(src_im, ROIs):
+def read_digits(src_im, ROIs, conf_threshold, prev_result):
 	digits = []
 
 	# Isolate red channel
@@ -126,7 +128,7 @@ def read_digits(src_im, ROIs):
 		im_buf[:,:,i] = im_channel
 	gray_im = cv2.cvtColor(im_buf, cv2.COLOR_BGR2GRAY)
 
-	for loc in ROIs:
+	for roi_i, loc in enumerate(ROIs):
 		roi_digits = []
 
 		# Crop ROI from source
@@ -143,7 +145,7 @@ def read_digits(src_im, ROIs):
 		matches = cv2.matchTemplate(pct_im, tpl_percent, cv2.TM_CCOEFF_NORMED)
 		_res, match_val, _res, match_loc = cv2.minMaxLoc(matches)
 
-		if(match_val > PERCENT_MATCH_THRESHOLD):
+		if(match_val > MATCH_THRESHOLD_PCT):
 			pct_x = match_loc[0]
 
 			num_digits = 1
@@ -167,18 +169,30 @@ def read_digits(src_im, ROIs):
 				digit_1d = np.float32(digit_1d)
 				digit, _res, _res, conf = model.find_nearest(digit_1d, k=1)
 
-				roi_digits.insert(0, (int(digit), int(conf)))
+				if conf < conf_threshold: # confidence is inverse with kNN
+					roi_digits.append(int(digit))
+				else:
+					# use result from previous, if exists
+					prev_roi = str(prev_result[roi_i])
+					prev_roi_len = len(prev_roi)
+					if prev_roi_len > i:
+						#print 'append prev: repl %d with %s' % (int(digit), prev_roi[prev_roi_len - i - 1])
+						roi_digits.append(prev_roi[prev_roi_len - i - 1])
 
-			digits_str = ''.join([str(d[0]) for d in roi_digits])
+			#digits_str = ''.join([str(d) for d in roi_digits])
 			# digits_conf = ','.join([str(d[1]) for d in roi_digits])
-			digits.append(digits_str)
+			digits.append(int(''.join(str(d) for d in roi_digits[::-1])))
 
 			# cv2.putText(src_im, digits_str, loc, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 			# cv2.putText(src_im, '%0.2f' % match_val, (loc[0], loc[1] + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 			# cv2.putText(src_im, digits_conf, (loc[0], loc[1] + 46), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 			
 		else:
-			digits.append('')
+			# use result from previous, if exists
+			if len(prev_result) > roi_i:
+				digits.append(prev_result[roi_i])
+			else:
+				digits.append([])
 
 	return digits
 
@@ -229,13 +243,49 @@ def process_video(video_path):
 		#elif state == STATE_STAGESELECT:
 		#elif state == STATE_INGAME:
 		if state == STATE_INGAME:
-			digits = read_digits(frame, regions)
-			if(''.join(digits) == ''):
+			digits = read_digits(frame, regions, OCR_CONF_THRESHOLD, events[STATE_INGAME][-1][1])
+
+			if(digits == ['' for _ in range(len(regions))]):
 				frames_without_digits += 1
 				if(frames_without_digits > FRAME_TIMEOUT):
 					state = STATE_CALIBRATE
-			elif(len(events[STATE_INGAME]) < 1 or digits != events[STATE_INGAME][-1][1]):
-				events[STATE_INGAME].append((frame_ms, digits))
+					frames_without_digits = 0
+					print 'Game state lost: %d ms' % frame_ms
+			else:
+				# # fill in missing digits from previous frame
+				# num_events = len(events[STATE_INGAME])
+				# if num_events > 0:
+				# 	prev_event = events[STATE_INGAME][-1][1]
+
+				# 	for r_i, roi in enumerate(digits):
+				# 		# if ROI blank, use last frame's if exists
+				# 		if roi == [] and len(prev_event) > r_i:
+				# 			digits[r_i] = prev_event[r_i]
+				# 		else:
+				# 			# check for low-confidence digits
+				# 			for d_i, d in enumerate(roi):
+				# 				if d == -1:
+				# 					# use same digit from last frame if exists
+				# 					last_digits = str(prev_event[r_i])
+				# 					if len(last_digits) > d_i:
+				# 						digits[r_i][d_i] = last_digits[d_i]
+				# 						# print 'repl low conf digit'
+				# 					else:
+				# 						# otherwise discard
+				# 						digits[r_i][d_i] = ''
+				# 						# print 'disc low conf digit'
+
+				# 			digits[r_i] = int(''.join([str(dig) for dig in roi]))
+
+				# 	# append only if digits changed
+				if digits != events[STATE_INGAME][-1][1]:
+					events[STATE_INGAME].append((frame_ms, digits))
+					print frame_ms
+					print digits
+				# else:
+				# 	# append first event unconditionally
+				# 	events[STATE_INGAME].append((frame_ms, digits))
+					
 
 		# cv2.imshow('frame', frame)
 		# key = cv2.waitKey(1)
