@@ -9,10 +9,10 @@ if(os.path.exists('templates/training-responses.data')):
 
 from SmashCVCore import processDigit
 
-DEBUG = True
+DEBUG = False
 
 # Generate training data
-np.random.seed(2099)
+np.random.seed(4444)
 responses = [int(i * 10) for i in np.random.random((2000, 1))]
 samples = np.empty((0, 10 * 10))
 
@@ -24,8 +24,8 @@ im_w = im.shape[1]
 char_w = (im_w / 2000)
 
 for i in range(0, 2000):
-	x1 = max(0, (i*char_w) + 2)
-	x2 = min(im_w, ((i+1)*char_w) + 2)
+	x1 = max(0, (i*char_w))
+	x2 = min(im_w, ((i+1)*char_w))
 
 	# add a little noise
 	#off_x = int(round(np.random.rand() * 4)) - 3
@@ -38,7 +38,7 @@ for i in range(0, 2000):
 		off_x += int(np.random.rand() * 4)
 
 	# crop out single char and process
-	char = im[off_top:im_h+off_bot, x1+off_x:x2]
+	char = im[off_top:im_h+off_bot, x1+off_x:x2 - 2]
 	char_resized = processDigit(char, False)
 
 	# insert 1-dimensional sample

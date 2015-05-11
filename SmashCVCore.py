@@ -21,6 +21,7 @@ except IOError:
 
 # Image processing options
 match_threshold = 0.75
+pct_threshold = 0.6
 
 # State
 STATE_CALIBRATE = 1
@@ -79,16 +80,18 @@ def calibrateFrame(src_im):
 	return STATE_CALIBRATE, []
 
 def processDigit(src_im, equalize=True, thresh=100):
-	if(equalize):
-		src_im = cv2.equalizeHist(src_im)
-	_res, im_bin = cv2.threshold(src_im, thresh, 255, cv2.THRESH_BINARY)
-	im_border = cv2.copyMakeBorder(im_bin, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=[0,0,0])
+	#if(equalize):
+	#	src_im = cv2.equalizeHist(src_im)
+	#_res, im_bin = cv2.threshold(src_im, thresh, 255, cv2.THRESH_BINARY)
+	#im_border = cv2.copyMakeBorder(im_bin, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=[0,0,0])
 	# if(erode):
 	# 	im_bin = cv2.erode(im_bin, kernel, 1)
-	im_resize = cv2.resize(im_bin, (10, 10))
+	im_resize = cv2.resize(src_im, (10, 10))
 	return im_resize
 
 def damageOCR(src_im, ROIs):
+	gray_im = isolateChannel(src_im, 2)
+
 	# Text is centered at (21, ),
 	# Characters have a width of 10
 	digits = []
@@ -97,23 +100,22 @@ def damageOCR(src_im, ROIs):
 		roi_digits = []
 
 		# Crop ROI from source
-		roi_im = src_im[
+		roi_im = gray_im[
 	 		loc[1] + 1: loc[1] + tpl_zero.shape[1] - 3,		# TODO: Magic numbers
 	 		loc[0] - 13 : loc[0] + tpl_zero.shape[0] + 15]
 	 	roi_dim = roi_im.shape[::-1]
-	 	cv2.imshow('ROI-A', roi_im)
+	 	#cv2.imshow('ROI-%d' % roi_i, roi_im)
 
 		# Find percent sign to figure digit count
 		pct_im = roi_im[
 			(roi_dim[1] / 2):roi_dim[1],
 			(roi_dim[0] / 2)+1:roi_dim[0]]
 
-		_res, pct_im_bin = cv2.threshold(pct_im, 80, 255, cv2.THRESH_BINARY)
-		matches = cv2.matchTemplate(pct_im_bin, tpl_percent, cv2.TM_CCOEFF_NORMED)
+		#_res, pct_im_bin = cv2.threshold(pct_im, 80, 255, cv2.THRESH_BINARY)
+		matches = cv2.matchTemplate(pct_im, tpl_percent, cv2.TM_CCOEFF_NORMED)
 		_res, match_val, _res, match_loc = cv2.minMaxLoc(matches)
 
-		if(match_val > 0.3):
-
+		if(match_val > pct_threshold):
 			pct_x = match_loc[0]
 
 			num_digits = 1
@@ -128,45 +130,52 @@ def damageOCR(src_im, ROIs):
 			for i in range(num_digits):
 				# crop digit from ROI based on offset from percentage
 				digit_im = roi_im[
-					0:roi_dim[1],
+					1:roi_dim[1],
 					pct_x - (10.5 * (i + 1)) + 2 : pct_x - (10 * i) ]	# TODO: Magic numbers
 
-				# OCR
-				digit_im = processDigit(digit_im, False, 210 - (30 * num_digits))
+				# kNN OCR
+				ocr_thresh = 210 - (40 * num_digits)
+				digit_im = processDigit(digit_im)
 				digit_1d = digit_im.reshape((1, 10 * 10))
 				digit_1d = np.float32(digit_1d)
-				digit, _res, _res, conf = model.find_nearest(digit_1d, k=1)
-				digit = int(digit)
+				digit, _res, _res, conf = model.find_nearest(digit_1d, k=1)				
 
-				# if(conf > 900000):
-				# 	digit = '?'
+				roi_digits.insert(0, (int(digit), int(conf)))
 
-				print '%s (%d)' % (digit, conf)
-				cv2.imshow('ROI', digit_im)
-				cv2.waitKey(0)
+			digits_str = ''.join([str(d[0]) for d in roi_digits])
+			digits_conf = ','.join([str(d[1]) for d in roi_digits])
 
-				roi_digits.insert(0, (digit, conf))
-				#cv2.imshow('ROI %d, Digit %i' % (roi_i, i), digit_im)
-
-			#digits.append(roi_digits)
-			#digits.append([d[0] for d in roi_digits])
-			digits.append(''.join([str(d[0]) for d in roi_digits]))
+			cv2.putText(src_im, digits_str, loc, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+			cv2.putText(src_im, '%0.2f' % match_val, (loc[0], loc[1] + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+			cv2.putText(src_im, digits_conf, (loc[0], loc[1] + 46), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+			digits.append(digits_str)
 		else:
-			digits.append('?')
+			digits.append('')
 			#digits.append(str(reduce(lambda x: int(x[0]), roi_digits)))
 
 	return digits
 
 def processVideo(video_path):
 	video = cv2.VideoCapture(video_path)
-	video.set(0, 3000)
-	state = STATE_CALIBRATE
+	#video.set(0, 3000)
 	regions = []
+
+	state = STATE_CALIBRATE
+	prev_state = STATE_CALIBRATE
+	events = []
+	
 	frames_without_digits = 0
+	total_frames = video.get(7)
+	prev_percent = 0
 
 	while(video.isOpened()):
 		ret, frame = video.read()
 		if not ret: break
+
+		frame_ms = video.get(0)
+		frame_progress = int((video.get(1) / total_frames) * 100)
+		if(frame_progress != prev_percent):
+			print '%d%%...' % prev_percent
 
 		if state != STATE_INGAME:
 			gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -176,29 +185,36 @@ def processVideo(video_path):
 		if state == STATE_CALIBRATE:
 			#log('No calibration found')
 			continue
-		elif state == STATE_CHARSELECT:
-			print 'Char select'
-		elif state == STATE_STAGESELECT:
-			print 'Stage select'
-		elif state == STATE_INGAME:
-			gray = isolateChannel(frame, 2)
-			digits = damageOCR(gray, regions)
-			print digits
-			if(len(digits) < 1):
+
+		# Track state changes
+		if prev_state != state:
+			events.append((frame_ms, state, []))
+			print 'State change: %d ms, %d' % (frame_ms, state)
+
+		prev_state = state
+		prev_percent = frame_progress
+
+		#if state == STATE_CHARSELECT:
+		#elif state == STATE_STAGESELECT:
+		#elif state == STATE_INGAME:
+		if state == STATE_INGAME:
+			digits = damageOCR(frame, regions)
+			if(''.join(digits) == ''):
 				frames_without_digits += 1
-				if(frames_without_digits > 300):
+				if(frames_without_digits > 100):
 					state = STATE_CALIBRATE
-					print 'lost ingame state'
+			elif len(events) < 1 or digits != events[-1][2]:
+				events.append((frame_ms, state, digits))
 
-		key = cv2.waitKey(1)
-		if key & 0xFF == ord('q'):
-			break
-		elif key & 0xFF == ord('w'):
-			cv2.waitKey(0)
+		# key = cv2.waitKey(1)
+		# if key & 0xFF == ord('q'):
+		# 	break
+		# elif key & 0xFF == ord('w'):
+		# 	cv2.waitKey(0)
 
-		cv2.imshow('frame', frame)
+		#cv2.imshow('frame', frame)
 		#cv2.imshow('gray', gray)
 
 	video.release()
-
-	cv2.destroyAllWindows()
+	print events
+	#cv2.destroyAllWindows()
