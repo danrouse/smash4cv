@@ -1,23 +1,35 @@
 from __future__ import unicode_literals
 
 import os.path
+import json
+import io
+import argparse
 import youtube_dl
 import SmashCVCore
 
+# CLI
+parser = argparse.ArgumentParser(description='Extract meaningful information from Super Smash Bros. for Wii U videos.')
+parser.add_argument('-id', dest='ytid',
+	help='YouTube video ID',
+	default='jcsKByup_Tw')
+parser.add_argument('-o', dest='outfile',
+	help='Output destination')
+args = parser.parse_args()
+
 # Youtube options
-#ytVideoID = '3tai70AIoe4'
-ytVideoID = 'jcsKByup_Tw'
-ytVideoPath = 'videos/%s.mp4'
-ytOptions = {
+yt_local_path = 'videos/%s.mp4'
+yt_options = {
 	'format': '132/133/135/mp4[acodec=none][height=240]/mp4[acodec=none][height<=360]',
-	'outtmpl': ytVideoPath % '%(id)s'
+	'outtmpl': yt_local_path % '%(id)s'
 }
-ytWatchURI = 'https://www.youtube.com/watch?v=%s'
+yt_remote_uri = 'https://www.youtube.com/watch?v=%s'
 
 # Download video
-if(not os.path.exists(ytVideoPath % ytVideoID)):
+if(not os.path.exists(yt_local_path % args.ytid)):
 	print 'downloading video'
-	with youtube_dl.YoutubeDL(ytOptions) as ytdl:
-		ytdl.download([ytWatchURI % ytVideoID])
+	with youtube_dl.YoutubeDL(yt_options) as ytdl:
+		ytdl.download([yt_remote_uri % args.ytid])
 
-SmashCVCore.processVideo(ytVideoPath % ytVideoID)
+events = SmashCVCore.processVideo(yt_local_path % args.ytid)
+with io.open('output/%s.txt' % args.ytid, 'w', encoding='utf-8') as f:
+	f.write(unicode(json.dumps(events, ensure_ascii=False)))

@@ -22,8 +22,17 @@ except IOError:
 	pass
 
 # Image processing options
-match_threshold = 0.75
-pct_threshold = 0.6
+# Lots of magic numbers here
+# Does making them constants remove the magic?
+# I just want to believe
+MATCH_THRESHOLD = 0.75
+PERCENT_MATCH_THRESHOLD = 0.6
+PCT_X_TWO_DIGITS = 5
+PCT_X_THREE_DIGITS = 10
+CROP_DAMAGE = (1, -3, -13, 15)
+CROP_DIGIT = (2, 0)
+DIGIT_WIDTH = 10
+FRAME_TIMEOUT = 200
 
 # State
 STATE_CALIBRATE = 1
@@ -34,25 +43,16 @@ STATE_STAGESELECT = 4
 def log(message):
 	print message
 
-def isolateChannel(im, channel):
-	im_channel = cv2.split(im)[channel]
-	im_buf = np.zeros_like(im)
-	
-	for i in range(0,3):
-		im_buf[:,:,i] = im_channel
-
-	return cv2.cvtColor(im_buf, cv2.COLOR_BGR2GRAY)
-
-def reduceRound(list_in, round_by):
+def reduce_round(list_in, round_by):
 	# Round each X down
 	# cast to a set (removing dupes), back to a list (ordered), and sorted
 	tick = dt()
 	ret = sorted(list(set([int(round(pt[0] / round_by, 0) * round_by) \
 					for pt in list_in])))
-	dt('reduceRound', tick)
+	dt('reduce_round', tick)
 	return ret
 
-def filterMatchTemplate(src_im, tpl_im, threshold, reduce_to_x=False, round_by=2):
+def filtered_match(src_im, tpl_im, threshold, reduce_to_x=False, round_by=2):
 	tick = dt()
 	matches = cv2.matchTemplate(src_im, tpl_im, cv2.TM_CCOEFF_NORMED)
 	dt('filter mt', tick)
@@ -63,7 +63,7 @@ def filterMatchTemplate(src_im, tpl_im, threshold, reduce_to_x=False, round_by=2
 	dt('filter s2', t_a)
 
 	if(reduce_to_x and len(matches) > 0):
-		xs = reduceRound(matches, round_by)
+		xs = reduce_round(matches, round_by)
 		y = matches[0][1]
 		return [(x, y) for x in xs]
 	else:
@@ -86,9 +86,12 @@ def calibrateFrame(src_im):
 	results = []
 	im_gray = cv2.cvtColor(src_im, cv2.COLOR_BGR2GRAY)
 
+	# Crop the top-left quadrant for faster searching
+	im_cropped = im_gray[0:im_gray.shape[0]/2, 0:im_gray.shape[1]/2]
+
 	# Search for character selection: gamepad icon for each player
 	t_a = dt()
-	cs_matches = filterMatchTemplate(im_gray, tpl_char, match_threshold, True)
+	cs_matches = filtered_match(im_cropped, tpl_char, MATCH_THRESHOLD, True)
 	dt('mt char', t_a)
 	if(len(cs_matches) > 0):
 		state = STATE_CHARSELECT
@@ -96,7 +99,7 @@ def calibrateFrame(src_im):
 	else:
 		# Look for random button on stage selection
 		t_b = dt()
-		ss_matches = filterMatchTemplate(im_gray, tpl_stage, match_threshold)
+		ss_matches = filtered_match(im_cropped, tpl_stage, MATCH_THRESHOLD)
 		dt('mt stage', t_b)
 		if(len(ss_matches) > 0):
 			state = STATE_STAGESELECT
@@ -104,7 +107,7 @@ def calibrateFrame(src_im):
 		else:
 			# Look for "0%" for in-game initialization
 			t_c = dt()
-			g_matches = filterMatchTemplate(im_gray, tpl_zero, match_threshold, True, 3)
+			g_matches = filtered_match(im_gray, tpl_zero, MATCH_THRESHOLD, True, 3)
 			dt('mt zero', t_c)
 			if(len(g_matches) > 1):
 				state = STATE_INGAME
@@ -114,37 +117,39 @@ def calibrateFrame(src_im):
 	return state, results
 
 def damageOCR(src_im, ROIs):
-	tick = dt()
-
-	gray_im = isolateChannel(src_im, 2)
 	digits = []
 
-	for roi_i, loc in enumerate(ROIs):
+	# Isolate red channel
+	im_channel = cv2.split(src_im)[2]
+	im_buf = np.zeros_like(src_im)
+	for i in range(0,3):
+		im_buf[:,:,i] = im_channel
+	gray_im = cv2.cvtColor(im_buf, cv2.COLOR_BGR2GRAY)
+
+	for loc in ROIs:
 		roi_digits = []
 
 		# Crop ROI from source
 		roi_im = gray_im[
-	 		loc[1] + 1: loc[1] + tpl_zero.shape[1] - 3,		# TODO: Magic numbers
-	 		loc[0] - 13 : loc[0] + tpl_zero.shape[0] + 15]
+	 		loc[1] + CROP_DAMAGE[0]: loc[1] + tpl_zero.shape[1] + CROP_DAMAGE[1],
+	 		loc[0] + CROP_DAMAGE[2] : loc[0] + tpl_zero.shape[0] + CROP_DAMAGE[3]]
 	 	roi_dim = roi_im.shape[::-1]
-	 	#cv2.imshow('ROI-%d' % roi_i, roi_im)
 
 		# Find percent sign to figure digit count
 		pct_im = roi_im[
 			(roi_dim[1] / 2):roi_dim[1],
-			(roi_dim[0] / 2)+1:roi_dim[0]]
+			(roi_dim[0] / 2)+1:roi_dim[0]] # Crop left x by 1
 
-		tick_mt = dt()
 		matches = cv2.matchTemplate(pct_im, tpl_percent, cv2.TM_CCOEFF_NORMED)
 		_res, match_val, _res, match_loc = cv2.minMaxLoc(matches)
 
-		if(match_val > pct_threshold):
+		if(match_val > PERCENT_MATCH_THRESHOLD):
 			pct_x = match_loc[0]
 
 			num_digits = 1
-			if(pct_x > 9):		# TODO: Magic numbers
+			if(pct_x >= PCT_X_THREE_DIGITS):
 				num_digits = 3
-			elif(pct_x > 4):
+			elif(pct_x >= PCT_X_TWO_DIGITS):
 				num_digits = 2
 
 			# adjust relative to ROI
@@ -154,10 +159,9 @@ def damageOCR(src_im, ROIs):
 				# crop digit from ROI based on offset from percentage
 				digit_im = roi_im[
 					1:roi_dim[1],
-					pct_x - (10.5 * (i + 1)) + 2 : pct_x - (10 * i) ]	# TODO: Magic numbers
+					pct_x - (DIGIT_WIDTH * (i + 1)) + CROP_DIGIT[0] : pct_x - (DIGIT_WIDTH * i) + CROP_DIGIT[1] ]
 
 				# kNN OCR
-				ocr_thresh = 210 - (40 * num_digits)
 				digit_im = cv2.resize(digit_im, (10, 10))
 				digit_1d = digit_im.reshape((1, 10 * 10))
 				digit_1d = np.float32(digit_1d)
@@ -176,7 +180,6 @@ def damageOCR(src_im, ROIs):
 		else:
 			digits.append('')
 
-	dt('ocr', tick)
 	return digits
 
 def processVideo(video_path):
@@ -185,7 +188,7 @@ def processVideo(video_path):
 
 	state = STATE_CALIBRATE
 	prev_state = STATE_CALIBRATE
-	events = []
+	events = {2: [], 3: [], 4: []}
 	
 	frames_without_digits = 0
 	total_frames = video.get(7)
@@ -197,26 +200,29 @@ def processVideo(video_path):
 		ret, frame = video.read()
 		if not ret: break
 
-		frame_ms = video.get(0)
+		frame_ms = int(video.get(0))
 		frame_num = video.get(1)
+
+		# See progress in CLI
 		frame_progress = int((frame_num / total_frames) * 100)
 		if(frame_progress != prev_percent):
 			print '%d%%...' % prev_percent
 		prev_percent = frame_progress
 
+		# Calibrate if not tracking for OCR
 		if state != STATE_INGAME:
 			state, regions = calibrateFrame(frame)
 
-		# If calibration was unsuccessful, skip 5 frames
+		# If calibration was unsuccessful, skip 10 frames
 		if state == STATE_CALIBRATE:
-			video.set(1, frame_num + 5)
+			video.set(1, frame_num + 10)
 			continue
 
 		# Track state changes
 		if prev_state != state:
-			events.append((frame_ms, state, []))
+			#events.append((frame_ms, state, []))
+			events[state].append((frame_ms, []))
 			print 'State change: %d ms, %d' % (frame_ms, state)
-
 		prev_state = state
 
 		#if state == STATE_CHARSELECT:
@@ -226,22 +232,19 @@ def processVideo(video_path):
 			digits = damageOCR(frame, regions)
 			if(''.join(digits) == ''):
 				frames_without_digits += 1
-				if(frames_without_digits > 100):
+				if(frames_without_digits > FRAME_TIMEOUT):
 					state = STATE_CALIBRATE
-			elif len(events) < 1 or digits != events[-1][2]:
-				events.append((frame_ms, state, digits))
+			elif(len(events[STATE_INGAME]) < 1 or digits != events[STATE_INGAME][-1][1]):
+				events[STATE_INGAME].append((frame_ms, digits))
 
+		# cv2.imshow('frame', frame)
 		# key = cv2.waitKey(1)
 		# if key & 0xFF == ord('q'):
 		# 	break
 		# elif key & 0xFF == ord('w'):
 		# 	cv2.waitKey(0)
 
-		#cv2.imshow('frame', frame)
-		#cv2.imshow('gray', gray)
-
 		dt('frame', tick)
 
 	video.release()
-	print events
-	#cv2.destroyAllWindows()
+	return events
