@@ -9,9 +9,11 @@ import SmashCVCore
 
 # CLI
 parser = argparse.ArgumentParser(description='Extract meaningful information from Super Smash Bros. for Wii U videos.')
-parser.add_argument('-id', dest='ytid',
+parser.add_argument('ytid', 
+	#est='ytid',
 	help='YouTube video ID',
-	default='jcsKByup_Tw')
+	#default='jcsKByup_Tw'
+	)
 parser.add_argument('-o', dest='outfile',
 	help='Output destination')
 args = parser.parse_args()
@@ -30,6 +32,6 @@ if(not os.path.exists(yt_local_path % args.ytid)):
 	with youtube_dl.YoutubeDL(yt_options) as ytdl:
 		ytdl.download([yt_remote_uri % args.ytid])
 
-events = SmashCVCore.processVideo(yt_local_path % args.ytid)
+events = SmashCVCore.process_video(yt_local_path % args.ytid)
 with io.open('output/%s.txt' % args.ytid, 'w', encoding='utf-8') as f:
 	f.write(unicode(json.dumps(events, ensure_ascii=False)))

@@ -79,7 +79,7 @@ def dt(title='',c=0):
 	else:
 		return tick
 
-def calibrateFrame(src_im):
+def calibrate_frame(src_im):
 	tick = dt()
 
 	state = STATE_CALIBRATE
@@ -116,7 +116,7 @@ def calibrateFrame(src_im):
 	dt('calibrate', tick)
 	return state, results
 
-def damageOCR(src_im, ROIs):
+def read_digits(src_im, ROIs):
 	digits = []
 
 	# Isolate red channel
@@ -182,7 +182,7 @@ def damageOCR(src_im, ROIs):
 
 	return digits
 
-def processVideo(video_path):
+def process_video(video_path):
 	video = cv2.VideoCapture(video_path)
 	regions = []
 
@@ -211,7 +211,7 @@ def processVideo(video_path):
 
 		# Calibrate if not tracking for OCR
 		if state != STATE_INGAME:
-			state, regions = calibrateFrame(frame)
+			state, regions = calibrate_frame(frame)
 
 		# If calibration was unsuccessful, skip 10 frames
 		if state == STATE_CALIBRATE:
@@ -229,7 +229,7 @@ def processVideo(video_path):
 		#elif state == STATE_STAGESELECT:
 		#elif state == STATE_INGAME:
 		if state == STATE_INGAME:
-			digits = damageOCR(frame, regions)
+			digits = read_digits(frame, regions)
 			if(''.join(digits) == ''):
 				frames_without_digits += 1
 				if(frames_without_digits > FRAME_TIMEOUT):

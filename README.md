@@ -8,7 +8,9 @@ A tool to extract meaningful information from videos of Super Smash Bros. for Wi
 - youtube_dl
 
 ## Usage
-`python SmashCV.py -i=jcsKByup_Tw -o=dest.json`
+`SmashCV.py [-o OUTFILE] ytid`
+`ytid` is the YouTube ID of the input video
+`OUTFILE` is the path to generated JSON
 
 ## Known Issues
 - Training data was generated in Photoshop, not from live game data. Unit testing the OCR is complicated without a proper training set.
