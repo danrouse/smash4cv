@@ -39,7 +39,7 @@ for i in range(0, 2000):
 
 	# crop out single char and process
 	char = im[off_top:im_h+off_bot, x1+off_x:x2 - 2]
-	char_resized = processDigit(char, False)
+	char_resized = cv2.resize(char, (10, 10))
 
 	# insert 1-dimensional sample
 	sample = char_resized.reshape((1, 10 * 10))

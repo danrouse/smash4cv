@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
 
+DEBUG = False
+
 # Templates
 tpl_char = cv2.imread('templates/char-select.png', 0)
 tpl_stage = cv2.imread('templates/stage-select.png', 0)
@@ -44,13 +46,21 @@ def isolateChannel(im, channel):
 def reduceRound(list_in, round_by):
 	# Round each X down
 	# cast to a set (removing dupes), back to a list (ordered), and sorted
-	return sorted(list(set([int(round(pt[0] / round_by, 0) * round_by) \
+	tick = dt()
+	ret = sorted(list(set([int(round(pt[0] / round_by, 0) * round_by) \
 					for pt in list_in])))
+	dt('reduceRound', tick)
+	return ret
 
 def filterMatchTemplate(src_im, tpl_im, threshold, reduce_to_x=False, round_by=2):
+	tick = dt()
 	matches = cv2.matchTemplate(src_im, tpl_im, cv2.TM_CCOEFF_NORMED)
+	dt('filter mt', tick)
+
+	t_a = dt()
 	matches = np.where(matches > threshold)
 	matches = zip(*matches[::-1])
+	dt('filter s2', t_a)
 
 	if(reduce_to_x and len(matches) > 0):
 		xs = reduceRound(matches, round_by)
@@ -59,41 +69,54 @@ def filterMatchTemplate(src_im, tpl_im, threshold, reduce_to_x=False, round_by=2
 	else:
 		return matches
 
+def dt(title='',c=0):
+	if not DEBUG: return
+
+	tick = cv2.getTickCount()
+	if c>0:
+		diff = (tick - c) / cv2.getTickFrequency()
+		print '%s: %.3fms' % (title, diff * 1000)
+	else:
+		return tick
+
 def calibrateFrame(src_im):
-	im_color = cv2.cvtColor(src_im, cv2.COLOR_GRAY2BGR)
+	tick = dt()
+
+	state = STATE_CALIBRATE
+	results = []
+	im_gray = cv2.cvtColor(src_im, cv2.COLOR_BGR2GRAY)
 
 	# Search for character selection: gamepad icon for each player
-	cs_matches = filterMatchTemplate(src_im, tpl_char, match_threshold, True)
+	t_a = dt()
+	cs_matches = filterMatchTemplate(im_gray, tpl_char, match_threshold, True)
+	dt('mt char', t_a)
 	if(len(cs_matches) > 0):
-		return STATE_CHARSELECT, cs_matches
+		state = STATE_CHARSELECT
+		results = cs_matches
+	else:
+		# Look for random button on stage selection
+		t_b = dt()
+		ss_matches = filterMatchTemplate(im_gray, tpl_stage, match_threshold)
+		dt('mt stage', t_b)
+		if(len(ss_matches) > 0):
+			state = STATE_STAGESELECT
+			results = ss_matches
+		else:
+			# Look for "0%" for in-game initialization
+			t_c = dt()
+			g_matches = filterMatchTemplate(im_gray, tpl_zero, match_threshold, True, 3)
+			dt('mt zero', t_c)
+			if(len(g_matches) > 1):
+				state = STATE_INGAME
+				results = g_matches
 
-	# Look for random button on stage selection
-	ss_matches = filterMatchTemplate(src_im, tpl_stage, match_threshold)
-	if(len(ss_matches) > 0):
-		return STATE_STAGESELECT, ss_matches
-
-	# Look for "0%" for in-game initialization
-	g_matches = filterMatchTemplate(src_im, tpl_zero, match_threshold, True, 3)
-	if(len(g_matches) > 1):
-		return STATE_INGAME, g_matches
-
-	return STATE_CALIBRATE, []
-
-def processDigit(src_im, equalize=True, thresh=100):
-	#if(equalize):
-	#	src_im = cv2.equalizeHist(src_im)
-	#_res, im_bin = cv2.threshold(src_im, thresh, 255, cv2.THRESH_BINARY)
-	#im_border = cv2.copyMakeBorder(im_bin, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=[0,0,0])
-	# if(erode):
-	# 	im_bin = cv2.erode(im_bin, kernel, 1)
-	im_resize = cv2.resize(src_im, (10, 10))
-	return im_resize
+	dt('calibrate', tick)
+	return state, results
 
 def damageOCR(src_im, ROIs):
-	gray_im = isolateChannel(src_im, 2)
+	tick = dt()
 
-	# Text is centered at (21, ),
-	# Characters have a width of 10
+	gray_im = isolateChannel(src_im, 2)
 	digits = []
 
 	for roi_i, loc in enumerate(ROIs):
@@ -111,7 +134,7 @@ def damageOCR(src_im, ROIs):
 			(roi_dim[1] / 2):roi_dim[1],
 			(roi_dim[0] / 2)+1:roi_dim[0]]
 
-		#_res, pct_im_bin = cv2.threshold(pct_im, 80, 255, cv2.THRESH_BINARY)
+		tick_mt = dt()
 		matches = cv2.matchTemplate(pct_im, tpl_percent, cv2.TM_CCOEFF_NORMED)
 		_res, match_val, _res, match_loc = cv2.minMaxLoc(matches)
 
@@ -135,29 +158,29 @@ def damageOCR(src_im, ROIs):
 
 				# kNN OCR
 				ocr_thresh = 210 - (40 * num_digits)
-				digit_im = processDigit(digit_im)
+				digit_im = cv2.resize(digit_im, (10, 10))
 				digit_1d = digit_im.reshape((1, 10 * 10))
 				digit_1d = np.float32(digit_1d)
-				digit, _res, _res, conf = model.find_nearest(digit_1d, k=1)				
+				digit, _res, _res, conf = model.find_nearest(digit_1d, k=1)
 
 				roi_digits.insert(0, (int(digit), int(conf)))
 
 			digits_str = ''.join([str(d[0]) for d in roi_digits])
-			digits_conf = ','.join([str(d[1]) for d in roi_digits])
-
-			cv2.putText(src_im, digits_str, loc, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-			cv2.putText(src_im, '%0.2f' % match_val, (loc[0], loc[1] + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-			cv2.putText(src_im, digits_conf, (loc[0], loc[1] + 46), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+			# digits_conf = ','.join([str(d[1]) for d in roi_digits])
 			digits.append(digits_str)
+
+			# cv2.putText(src_im, digits_str, loc, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+			# cv2.putText(src_im, '%0.2f' % match_val, (loc[0], loc[1] + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+			# cv2.putText(src_im, digits_conf, (loc[0], loc[1] + 46), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+			
 		else:
 			digits.append('')
-			#digits.append(str(reduce(lambda x: int(x[0]), roi_digits)))
 
+	dt('ocr', tick)
 	return digits
 
 def processVideo(video_path):
 	video = cv2.VideoCapture(video_path)
-	#video.set(0, 3000)
 	regions = []
 
 	state = STATE_CALIBRATE
@@ -169,21 +192,24 @@ def processVideo(video_path):
 	prev_percent = 0
 
 	while(video.isOpened()):
+		tick = dt()
+
 		ret, frame = video.read()
 		if not ret: break
 
 		frame_ms = video.get(0)
-		frame_progress = int((video.get(1) / total_frames) * 100)
+		frame_num = video.get(1)
+		frame_progress = int((frame_num / total_frames) * 100)
 		if(frame_progress != prev_percent):
 			print '%d%%...' % prev_percent
+		prev_percent = frame_progress
 
 		if state != STATE_INGAME:
-			gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-			state, regions = calibrateFrame(gray)
+			state, regions = calibrateFrame(frame)
 
-		# If calibration was unsuccessful, pass
+		# If calibration was unsuccessful, skip 5 frames
 		if state == STATE_CALIBRATE:
-			#log('No calibration found')
+			video.set(1, frame_num + 5)
 			continue
 
 		# Track state changes
@@ -192,7 +218,6 @@ def processVideo(video_path):
 			print 'State change: %d ms, %d' % (frame_ms, state)
 
 		prev_state = state
-		prev_percent = frame_progress
 
 		#if state == STATE_CHARSELECT:
 		#elif state == STATE_STAGESELECT:
@@ -214,6 +239,8 @@ def processVideo(video_path):
 
 		#cv2.imshow('frame', frame)
 		#cv2.imshow('gray', gray)
+
+		dt('frame', tick)
 
 	video.release()
 	print events
