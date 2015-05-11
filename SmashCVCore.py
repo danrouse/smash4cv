@@ -1,5 +1,11 @@
 import cv2
 import numpy as np
+import tesseract
+
+api = tesseract.TessBaseAPI()
+api.Init('.', 'eng', tesseract.OEM_DEFAULT)
+api.SetPageSegMode(tesseract.PSM_AUTO)
+api.SetVariable('tessedit_char_whitelist', '0123456789')
 
 DEBUG = False
 
@@ -33,7 +39,7 @@ PCT_X_THREE_DIGITS = 10
 CROP_DAMAGE = (1, -2, -13, 15)
 CROP_DIGIT = (2, 0)
 DIGIT_WIDTH = 10
-FRAME_TIMEOUT = 200
+FRAME_TIMEOUT = 300
 OCR_CONF_THRESHOLD = 350000
 
 # State
@@ -42,10 +48,14 @@ STATE_INGAME = 2
 STATE_CHARSELECT = 3
 STATE_STAGESELECT = 4
 
-def log(message):
-	print message
-
 def reduce_round(list_in, round_by):
+	"""Convert a list of (x,y) tuples to a sorted list of rounded, unique values.
+
+	Args:
+		list_in (list): List of (x,y) tuples
+		round_by (int): Amount to round each X value by
+	"""
+
 	# Round each X down
 	# cast to a set (removing dupes), back to a list (ordered), and sorted
 	tick = dt()
@@ -55,6 +65,19 @@ def reduce_round(list_in, round_by):
 	return ret
 
 def filtered_match(src_im, tpl_im, threshold, reduce_to_x=False, round_by=2):
+	"""Match a template and only return results above a specified threshold.
+
+	Args:
+		src_im (cv2 image): Frame to process
+		tpl_im (cv2 image): Template to find
+		threshold (float): Confidence threshold
+		reduce_to_x (bool, optional): Reduce matches to rounded x values by a single y
+		round_by (int, optional): Reduced X values are rounded by this amount
+
+	Returns:
+		matches (list): List of matched (x, y) coordinates
+	"""
+
 	tick = dt()
 	matches = cv2.matchTemplate(src_im, tpl_im, cv2.TM_CCOEFF_NORMED)
 	dt('filter mt', tick)
@@ -72,6 +95,22 @@ def filtered_match(src_im, tpl_im, threshold, reduce_to_x=False, round_by=2):
 		return matches
 
 def dt(title='',c=0):
+	"""Measure performance.
+
+	Example:
+		>>> timer = dt()
+		>>> [do_something(i) for i in range(100)]
+		>>> dt('foo', timer)
+		'foo: 0.025ms'
+
+	Args:
+		title (str, optional): Timer name for output
+		c (int, optional): Initial timer value
+
+	Returns:
+		tick (int): Initial timer value, returned when called without arguments
+	"""
+
 	if not DEBUG: return
 
 	tick = cv2.getTickCount()
@@ -82,6 +121,24 @@ def dt(title='',c=0):
 		return tick
 
 def calibrate_frame(src_im):
+	"""Detect which state a frame is in.
+
+	Uses cv2.matchTemplate to look for, in the following order:
+		In the top-left quadrant of the frame:
+			- back button from character select screen
+			- back button from stage select screen
+		In the entire frame:
+			- '0%' for each player
+
+	Args:
+		src_im (cv2 image): The frame to process
+
+	Returns:
+		state (int): Constant of detected state, one of
+			STATE_CHARSELECT, STATE_STAGESELECT, STATE_INGAME,
+			or, if nothing was found, STATE_CALIBRATE
+		results (list): Filtered ROI (x, y) positions
+	"""
 	tick = dt()
 
 	state = STATE_CALIBRATE
@@ -92,25 +149,19 @@ def calibrate_frame(src_im):
 	im_cropped = im_gray[0:im_gray.shape[0]/2, 0:im_gray.shape[1]/2]
 
 	# Search for character selection: gamepad icon for each player
-	t_a = dt()
 	cs_matches = filtered_match(im_cropped, tpl_char, MATCH_THRESHOLD, True)
-	dt('mt char', t_a)
 	if(len(cs_matches) > 0):
 		state = STATE_CHARSELECT
 		results = cs_matches
 	else:
 		# Look for random button on stage selection
-		t_b = dt()
 		ss_matches = filtered_match(im_cropped, tpl_stage, MATCH_THRESHOLD)
-		dt('mt stage', t_b)
 		if(len(ss_matches) > 0):
 			state = STATE_STAGESELECT
 			results = ss_matches
 		else:
 			# Look for "0%" for in-game initialization
-			t_c = dt()
 			g_matches = filtered_match(im_gray, tpl_zero, MATCH_THRESHOLD_ZERO, True, 3)
-			dt('mt zero', t_c)
 			if(len(g_matches) > 1):
 				state = STATE_INGAME
 				results = g_matches
@@ -118,8 +169,44 @@ def calibrate_frame(src_im):
 	dt('calibrate', tick)
 	return state, results
 
+def read_stage(src_im):
+	"""Read stage name from a frame
+
+	Args:
+		src_im (cv2 image): The frame to process
+
+	Returns:
+		string: stage name if OCR is successful, '' otherwise
+	"""
+
+	# Crop out bottom-left quadrant
+	im_cropped = src_im[
+		src_im.shape[0]/2:src_im.shape[0],
+		0:src_im.shape[1]/2]
+	# Severe thresholding to isolate white text
+	res, im_thresh = cv2.threshold(im_cropped, 200, 255, cv2.THRESH_BINARY)
+
+	cv2.imshow('read_stage', im_thresh)
+	cv2.waitKey(0)
+
+	return ''
+
 def read_digits(src_im, ROIs, conf_threshold, prev_result):
+	"""Read digits from specified ROIs in a frame.
+
+	Args:
+		src_im (cv2 image): The frame to process
+		ROIs (list): List of (x, y) coordinates to watch
+		conf_threshold (int): k-NN confidence upper bound
+		prev_result (list): list of results from previous frame, for low-confidence value replacement
+
+	Returns:
+		digits (list): OCRed integers corresponding to each input ROI
+		amount_replaced (float): Proportion of low-confidence values replaced
+	"""
+
 	digits = []
+	amount_replaced = 0.0
 
 	# Isolate red channel
 	im_channel = cv2.split(src_im)[2]
@@ -163,11 +250,20 @@ def read_digits(src_im, ROIs, conf_threshold, prev_result):
 					1:roi_dim[1],
 					pct_x - (DIGIT_WIDTH * (i + 1)) + CROP_DIGIT[0] : pct_x - (DIGIT_WIDTH * i) + CROP_DIGIT[1] ]
 
+				# Tesseract OCR
+				ocr_im = cv2.cv.CreateImageHeader(digit_im.shape[::-1], cv2.cv.IPL_DEPTH_8U, 1)
+				cv2.cv.SetData(ocr_im, digit_im.tostring(), digit_im.dtype.itemsize * digit_im.shape[1])
+				tesseract.SetCvImage(ocr_im, api)
+				ocr_text = api.GetUTF8Text()
+				ocr_conf = api.MeanTextConf()
+
 				# kNN OCR
 				digit_im = cv2.resize(digit_im, (10, 10))
 				digit_1d = digit_im.reshape((1, 10 * 10))
 				digit_1d = np.float32(digit_1d)
 				digit, _res, _res, conf = model.find_nearest(digit_1d, k=1)
+
+				print 'KNN: %d (%d) | Tess: %s (%d%%)' % (int(digit), int(conf), ocr_text, ocr_conf)
 
 				if conf < conf_threshold: # confidence is inverse with kNN
 					roi_digits.append(int(digit))
@@ -178,6 +274,8 @@ def read_digits(src_im, ROIs, conf_threshold, prev_result):
 					if prev_roi_len > i:
 						#print 'append prev: repl %d with %s' % (int(digit), prev_roi[prev_roi_len - i - 1])
 						roi_digits.append(prev_roi[prev_roi_len - i - 1])
+
+					amount_replaced += (0.75 / num_digits) / len(ROIs)
 
 			#digits_str = ''.join([str(d) for d in roi_digits])
 			# digits_conf = ','.join([str(d[1]) for d in roi_digits])
@@ -191,12 +289,22 @@ def read_digits(src_im, ROIs, conf_threshold, prev_result):
 			# use result from previous, if exists
 			if len(prev_result) > roi_i:
 				digits.append(prev_result[roi_i])
+				amount_replaced += 1.0 / len(ROIs)
 			else:
 				digits.append([])
 
-	return digits
+	return digits, amount_replaced
 
 def process_video(video_path):
+	"""Process an entire video.
+
+	Args:
+		video_path (str): Path to local video to load
+
+	Returns:
+		events (list): List of detected events and event data
+	"""
+
 	video = cv2.VideoCapture(video_path)
 	regions = []
 
@@ -227,9 +335,9 @@ def process_video(video_path):
 		if state != STATE_INGAME:
 			state, regions = calibrate_frame(frame)
 
-		# If calibration was unsuccessful, skip 10 frames
+		# If calibration was unsuccessful, skip 15 frames
 		if state == STATE_CALIBRATE:
-			video.set(1, frame_num + 10)
+			video.set(1, frame_num + 15)
 			continue
 
 		# Track state changes
@@ -240,52 +348,26 @@ def process_video(video_path):
 		prev_state = state
 
 		#if state == STATE_CHARSELECT:
-		#elif state == STATE_STAGESELECT:
-		#elif state == STATE_INGAME:
-		if state == STATE_INGAME:
-			digits = read_digits(frame, regions, OCR_CONF_THRESHOLD, events[STATE_INGAME][-1][1])
-
-			if(digits == ['' for _ in range(len(regions))]):
+		if state == STATE_STAGESELECT:
+			# Crop bottom left quadrant to OCR stage name
+			stage = read_stage(frame)
+			print 'Stage: %s' % stage
+		elif state == STATE_INGAME:
+			digits, replaced = read_digits(frame, regions, OCR_CONF_THRESHOLD, events[STATE_INGAME][-1][1])
+			
+			if(replaced == 1.0):
 				frames_without_digits += 1
 				if(frames_without_digits > FRAME_TIMEOUT):
 					state = STATE_CALIBRATE
 					frames_without_digits = 0
 					print 'Game state lost: %d ms' % frame_ms
 			else:
-				# # fill in missing digits from previous frame
-				# num_events = len(events[STATE_INGAME])
-				# if num_events > 0:
-				# 	prev_event = events[STATE_INGAME][-1][1]
-
-				# 	for r_i, roi in enumerate(digits):
-				# 		# if ROI blank, use last frame's if exists
-				# 		if roi == [] and len(prev_event) > r_i:
-				# 			digits[r_i] = prev_event[r_i]
-				# 		else:
-				# 			# check for low-confidence digits
-				# 			for d_i, d in enumerate(roi):
-				# 				if d == -1:
-				# 					# use same digit from last frame if exists
-				# 					last_digits = str(prev_event[r_i])
-				# 					if len(last_digits) > d_i:
-				# 						digits[r_i][d_i] = last_digits[d_i]
-				# 						# print 'repl low conf digit'
-				# 					else:
-				# 						# otherwise discard
-				# 						digits[r_i][d_i] = ''
-				# 						# print 'disc low conf digit'
-
-				# 			digits[r_i] = int(''.join([str(dig) for dig in roi]))
-
-				# 	# append only if digits changed
+				# append only if digits changed
 				if digits != events[STATE_INGAME][-1][1]:
 					events[STATE_INGAME].append((frame_ms, digits))
-					print frame_ms
-					print digits
 				# else:
 				# 	# append first event unconditionally
 				# 	events[STATE_INGAME].append((frame_ms, digits))
-					
 
 		# cv2.imshow('frame', frame)
 		# key = cv2.waitKey(1)
