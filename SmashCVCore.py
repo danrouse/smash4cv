@@ -5,7 +5,7 @@ import tesseract
 api = tesseract.TessBaseAPI()
 api.Init('.', 'eng', tesseract.OEM_DEFAULT)
 api.SetPageSegMode(tesseract.PSM_AUTO)
-api.SetVariable('tessedit_char_whitelist', '0123456789')
+#api.SetVariable('tessedit_char_whitelist', '0123456789')
 
 DEBUG = False
 
@@ -16,6 +16,7 @@ tpl_zero = cv2.imread('templates/zero-percent-color-small.png', 0)
 tpl_percent = cv2.imread('templates/percent-sign.png', 0)
 
 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (8, 3))
 
 # OCR KNearest
 try:
@@ -40,7 +41,9 @@ CROP_DAMAGE = (1, -2, -13, 15)
 CROP_DIGIT = (2, 0)
 DIGIT_WIDTH = 10
 FRAME_TIMEOUT = 300
-OCR_CONF_THRESHOLD = 350000
+KNN_CONF_THRESHOLD = 350000
+OCR_CONF_THRESHOLD = 0.7
+AREA_STAGE_TEXT = (1000, )
 
 # State
 STATE_CALIBRATE = 1
@@ -169,36 +172,79 @@ def calibrate_frame(src_im):
 	dt('calibrate', tick)
 	return state, results
 
-def read_stage(src_im):
+def read_stage(src_im, conf_threshold=OCR_CONF_THRESHOLD):
 	"""Read stage name from a frame
 
 	Args:
 		src_im (cv2 image): The frame to process
+		conf_threshold (int, optional): Tesseract OCR confidence threshold
 
 	Returns:
-		string: stage name if OCR is successful, '' otherwise
+		stage (string): stage name if OCR is successful, '' otherwise
 	"""
 
 	# Crop out bottom-left quadrant
 	im_cropped = src_im[
 		src_im.shape[0]/2:src_im.shape[0],
 		0:src_im.shape[1]/2]
-	# Severe thresholding to isolate white text
-	res, im_thresh = cv2.threshold(im_cropped, 200, 255, cv2.THRESH_BINARY)
+	im_gray = cv2.cvtColor(im_cropped, cv2.COLOR_BGR2GRAY)
 
-	cv2.imshow('read_stage', im_thresh)
+	# Severe thresholding to isolate white text
+	_res, im_thresh = cv2.threshold(im_gray, 240, 255, cv2.THRESH_BINARY)
+	im_morph = cv2.erode(im_thresh, kernel, 3)
+	im_morph_2 = cv2.dilate(im_morph, kernel_h, 5)
+	im_morph_3 = cv2.dilate(im_morph, kernel_h, 5)
+	contours, _res = cv2.findContours(im_morph_2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+	largest_area = 0
+	largest_bbox = []
+	largest_contour = []
+	for c in contours:
+		area = cv2.contourArea(c)
+		if area > largest_area:
+			largest_area = area
+			largest_bbox = cv2.boundingRect(c)
+			largest_contour = c
+
+	if largest_area == 0:
+		# no matches in sight
+		return ''
+
+	cv2.drawContours(im_cropped, largest_contour, -1, (0, 255, 0), -1)
+	print 'area: %0.2f' % largest_area
+	print largest_bbox
+	text_im = im_gray[
+		largest_bbox[1]:largest_bbox[1] + largest_bbox[3],
+		largest_bbox[0]:largest_bbox[0] + largest_bbox[2]]
+	_res, text_im = cv2.threshold(text_im, 200, 255, cv2.THRESH_BINARY)
+	text_im = cv2.dilate(text_im, kernel, 2)
+
+	# Tesseract OCR
+	ocr_im = cv2.cv.CreateImageHeader(text_im.shape[::-1], cv2.cv.IPL_DEPTH_8U, 1)
+	cv2.cv.SetData(ocr_im, text_im.tostring(), text_im.dtype.itemsize * text_im.shape[1])
+	tesseract.SetCvImage(ocr_im, api)
+	ocr_text = api.GetUTF8Text()
+	ocr_conf = api.MeanTextConf()
+
+	print 'Stage: %s (%d%%)' % (ocr_text.strip(), ocr_conf)
+	cv2.imshow('ocr', text_im)
+	cv2.imshow('ocr-search', im_morph_3)
+	cv2.imshow('ocr-full', im_cropped)
 	cv2.waitKey(0)
 
-	return ''
+	if ocr_conf > conf_threshold:
+		return ocr_text.strip()
+	else:
+		return ''
 
-def read_digits(src_im, ROIs, conf_threshold, prev_result):
+def read_digits(src_im, ROIs, prev_result, conf_threshold=KNN_CONF_THRESHOLD):
 	"""Read digits from specified ROIs in a frame.
 
 	Args:
 		src_im (cv2 image): The frame to process
 		ROIs (list): List of (x, y) coordinates to watch
-		conf_threshold (int): k-NN confidence upper bound
-		prev_result (list): list of results from previous frame, for low-confidence value replacement
+		prev_result (list, optional): list of results from previous frame,
+			for low-confidence value replacement
+		conf_threshold (int, optional): k-NN confidence upper bound
 
 	Returns:
 		digits (list): OCRed integers corresponding to each input ROI
@@ -251,11 +297,11 @@ def read_digits(src_im, ROIs, conf_threshold, prev_result):
 					pct_x - (DIGIT_WIDTH * (i + 1)) + CROP_DIGIT[0] : pct_x - (DIGIT_WIDTH * i) + CROP_DIGIT[1] ]
 
 				# Tesseract OCR
-				ocr_im = cv2.cv.CreateImageHeader(digit_im.shape[::-1], cv2.cv.IPL_DEPTH_8U, 1)
-				cv2.cv.SetData(ocr_im, digit_im.tostring(), digit_im.dtype.itemsize * digit_im.shape[1])
-				tesseract.SetCvImage(ocr_im, api)
-				ocr_text = api.GetUTF8Text()
-				ocr_conf = api.MeanTextConf()
+				# ocr_im = cv2.cv.CreateImageHeader(digit_im.shape[::-1], cv2.cv.IPL_DEPTH_8U, 1)
+				# cv2.cv.SetData(ocr_im, digit_im.tostring(), digit_im.dtype.itemsize * digit_im.shape[1])
+				# tesseract.SetCvImage(ocr_im, api)
+				# ocr_text = api.GetUTF8Text()
+				# ocr_conf = api.MeanTextConf()
 
 				# kNN OCR
 				digit_im = cv2.resize(digit_im, (10, 10))
@@ -263,7 +309,7 @@ def read_digits(src_im, ROIs, conf_threshold, prev_result):
 				digit_1d = np.float32(digit_1d)
 				digit, _res, _res, conf = model.find_nearest(digit_1d, k=1)
 
-				print 'KNN: %d (%d) | Tess: %s (%d%%)' % (int(digit), int(conf), ocr_text, ocr_conf)
+				# print 'KNN: %d (%d) | Tess: %s (%d%%)' % (int(digit), int(conf), ocr_text, ocr_conf)
 
 				if conf < conf_threshold: # confidence is inverse with kNN
 					roi_digits.append(int(digit))
@@ -351,9 +397,10 @@ def process_video(video_path):
 		if state == STATE_STAGESELECT:
 			# Crop bottom left quadrant to OCR stage name
 			stage = read_stage(frame)
-			print 'Stage: %s' % stage
+			#print 'Stage: %s' % stage
 		elif state == STATE_INGAME:
-			digits, replaced = read_digits(frame, regions, OCR_CONF_THRESHOLD, events[STATE_INGAME][-1][1])
+			digits, replaced = read_digits(frame, regions, events[STATE_INGAME][-1][1])
+			OCR_CONF_THRESHOLD = 0.7
 			
 			if(replaced == 1.0):
 				frames_without_digits += 1
