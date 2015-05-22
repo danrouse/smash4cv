@@ -1,0 +1,22 @@
+{
+	"path":	{
+		"videos":		"./videos",
+		"training":		"./training",
+		"templates":	"./templates",
+		"output":		"./output"
+	},
+
+	"knn":		{
+		"names":	{
+			"size":			[50, 7],
+			"tokens":		true,
+			"threshold":	0
+		},
+		"digits":	{
+			"size":			[10, 20],
+			"tokens":		false,
+			"threshold":	0,
+			"conf":			2200
+		}
+	}
+}

@@ -1,5 +1,8 @@
-tessdata
-videos
-frames
-output
+old/*
+videos/*
+output/*
+training/characters
+training/digits
+training/names
+training/stages
 *.pyc
