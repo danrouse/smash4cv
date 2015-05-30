@@ -290,4 +290,4 @@ class SmashVideo:
 		return dst_im
 
 #stats = SmashVideo('8uqAAppaCa4', debug_mode = 5)
-stats = SmashVideo('mtZiCgiqHWU', debug_mode = 0)
+stats = SmashVideo('3tai70AIoe4', debug_mode = 5)
