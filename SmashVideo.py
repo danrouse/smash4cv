@@ -1,4 +1,3 @@
-from __future__ import unicode_literals
 from glob import glob
 
 import os
@@ -60,7 +59,7 @@ class SmashVideo:
 		self.debug_log.append((log_level, data))
 		if self.debug_mode >= log_level:
 			data = [str(d) for d in data]
-			print ': '.join(data)
+			print(': '.join(data))
 
 	def benchmark(self, caller='generic', start=False, subtract=0):
 		if self.debug_mode < 4: return
@@ -146,7 +145,7 @@ class SmashVideo:
 						_res, unique = np.unique(rounded[0], True)
 						conf = np.sum(matches[results][unique])
 						coords[1] = [min(coords[1])] * len(coords[1])
-						coords = zip(coords[0][unique], coords[1][unique])
+						coords = list(zip(coords[0][unique], coords[1][unique]))
 						if conf > best_match and len(coords) >= len(best_match_coords):
 							best_match = conf
 							best_match_coords = coords
@@ -211,7 +210,7 @@ class SmashVideo:
 						break
 
 				if self.debug_mode > 0:
-					cv2.circle(src_im, (x+p_loc[0]-(im_w/30), y+p_loc[1]), 3, (0, 255, 255), 2)
+					cv2.circle(src_im, ( int((x+p_loc[0]-(im_w/30))), (y+p_loc[1]) ), 3, (0, 255, 255), 2)
 
 				self.benchmark('Digit OCR')
 			else:
@@ -290,4 +289,4 @@ class SmashVideo:
 		return dst_im
 
 #stats = SmashVideo('8uqAAppaCa4', debug_mode = 5)
-stats = SmashVideo('mtZiCgiqHWU', debug_mode = 0)
+stats = SmashVideo('mtZiCgiqHWU', debug_mode = 3)

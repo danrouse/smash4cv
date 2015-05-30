@@ -9,7 +9,8 @@ with open('config.json') as fp:
 class kNN:
 
 	def __init__(self, name, training=False, size=(10,10), tokens=True, threshold=0):
-		self.model = cv2.KNearest()
+		#self.model = cv2.ml.KNearest()
+		self.model = cv2.ml.KNearest_create()
 		self.name = name
 		self.token_list = []
 
@@ -28,7 +29,7 @@ class kNN:
 			sdata = np.loadtxt('%s/%s-samples.data' % (config['path']['training'], name), np.float32)
 			rdata = np.loadtxt('%s/%s-responses.data' % (config['path']['training'], name), np.float32)
 			rdata = rdata.reshape((rdata.size, 1))
-			self.model.train(sdata, rdata)
+			self.model.train(sdata, cv2.ml.ROW_SAMPLE, rdata)
 
 			with open('%s/%s-tokens.data' % (config['path']['training'], name)) as f:
 				tdata = [line.rsplit('\n') for line in f.readlines()]
@@ -44,7 +45,7 @@ class kNN:
 
 		matrix = source.reshape((1, self.size[0] * self.size[1]))
 		matrix = np.float32(matrix)
-		match, _, matches, confs = self.model.find_nearest(matrix, k=k)
+		match, _, matches, confs = self.model.findNearest(matrix, k=k)
 		confs /= (self.size[0] * self.size[1])
 		confs /= k
 		confs = confs[0]
@@ -93,9 +94,9 @@ class kNN:
 		self.sources = sources
 		self.responses = responses
 
-if __name__ == '__main__':
-	knn_names = kNN('names', training=True)
-	knn_names.train()
+# if __name__ == '__main__':
+# 	knn_names = kNN('names', training=True)
+# 	knn_names.train()
 
-	knn_digits = kNN('digits', training=True)
-	knn_digits.train()
+# 	knn_digits = kNN('digits', training=True)
+# 	knn_digits.train()
