@@ -1,26 +1,35 @@
 # Smash 4 Computer Vision
 
-A tool to extract meaningful information from videos of Super Smash Bros. for Wii U. Why watch people play video games when a computer can do the same?
+A tool to extract meaningful information from videos of Super Smash Bros. for Wii U: players, fighters, and game events. smash4cv automatically extracts game stats (JSON) and highlight reels from each video.
 
-## Dependencies
-- OpenCV/cv2
-- numpy
+
+## Setup
+- Python 3.4
+- OpenCV 3.0rc1 (with contrib)
 - youtube_dl
 
 ## Usage
-`SmashCV.py [-o OUTFILE] ytid`
+- Add videos to the download/processing queue
+	
+	- `scv-download.py --id=8uqAAppaCa4`
+	- `scv-download.py --user=VideoGameBootCamp --filter=[Vv][Ss].+[sS]mash\s*4`
 
-Where:
-- `ytid` is the YouTube ID of the input video
-- `OUTFILE` is the path to generated JSON
+- Process downloaded videos
 
-## Known Issues
-- Training data was generated in Photoshop, not from live game data. Unit testing the OCR is complicated without a proper training set.
-- Only tested at the moment with VGBC replays. Have to add in dynamic scaling/template matching to support other streams (inner video may be different size) but should be simple! *Famous last words.*
+	`scv-process.py`
+	`scv-process.py --video=videos/8uqAAppaCa4.mp4`
+	`scv-process.py --video=videos/8uqAAppaCa4.mp4 --retrain=4460`
+
+## Configuration
+Values in [config.json](config.json) can be modified to achieve better detection results.
 
 ## Training
-### kNN
-k-NearestNeighbor is used to quickly recognize digits in the in-game state of the software. A random seed was used to generate test data which was imported into Photoshop and saved as a grayscale PNG, with font styles and noise, using the in-game numbers font (DF Gothic SU)
 
-### Tesseract
-Tesseract is used for general text OCR. Training data was created following [https://code.google.com/p/tesseract-ocr/wiki/TrainingTesseract3](this guide), using the data in ./training/
+This program uses two methods of region detection:
+
+	- *matchTemplate* (`cv2.matchTemplate`) detects game states, using the templates in config.path.templates (default: ./templates). These templates should be a fairly low resolution, as the source frames are downsampled to find the best match.
+
+	- *KNearest* (`kNN.kNN` < `cv2.ml.KNearest`) detects in-game state: names, digits, and stages.
+
+## Roadmap and Known Issues
+- Doesn't work with all Smash streamers. Need to be able to detect from any video layout with minimal tweaking.

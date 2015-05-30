@@ -1,8 +1,9 @@
-old/*
+old
+
 videos/*
 output/*
-training/characters
-training/digits
-training/names
-training/stages
+
+training/digits/*
+
 *.pyc
+__pycache__

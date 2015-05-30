@@ -13,7 +13,8 @@ from kNN import kNN
 
 STATE_UNKNOWN	= 1		
 STATE_LOADING	= 2
-STATE_QUIT		= 3		# Used to quit in debug mode
+STATE_INGAME	= 3
+STATE_QUIT		= 4		# Used to quit in debug mode
 
 DETECT_DEAD		= -1
 DETECT_UNKNOWN	= -2
@@ -29,8 +30,10 @@ SHOW_BENCHMARK	= False
 kl_cross = cv2.getStructuringElement(cv2.MORPH_CROSS, (5, 5))
 kl_square = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 
-tp_zero = cv2.imread('%s/zero-percent-color-small.png' % config['path']['templates'], 0)
-tp_percent = cv2.imread('%s/percent-sign.png' % config['path']['templates'], 0)
+tpl_zero = cv2.imread('%s/zero-percent-color-small.png' % config['path']['templates'], 0)
+tpl_percent = cv2.imread('%s/percent-sign.png' % config['path']['templates'], 0)
+tpl_csel = cv2.imread('%s/char-select.png' % config['path']['templates'], 0)
+tpl_ssel = cv2.imread('%s/stage-select.png' % config['path']['templates'], 0)
 
 knn_names = kNN('names')
 knn_digits = kNN('digits')
@@ -112,20 +115,32 @@ class SmashVideo:
 			progress = int((self.cur_frame / self.total_frames) * 100)
 			if progress != self.cur_progress:
 				self.cur_progress = progress
-				self.log(('Progress', '%d%%' % progress), DEBUG_NOTICE)
+				self.log('Progress: %d%%' % progress, DEBUG_NOTICE)
 
-			new_state = self.process_frame(frame)
-			if new_state != self.state:
-				self.state = new_state
+			frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+			is_loading = self.detect_loading(frame_gray)
 
-				self.video.set(1, self.cur_frame - 11)
-				ret, prev_frame = self.video.read()
-				self.video.set(1, self.cur_frame + 9)
-				ret, next_frame = self.video.read()
+			if is_loading and self.state != STATE_LOADING:
+				# Entering loading state
+				# Attempt to detect out-of-game state
+				self.video.set(1, self.cur_frame - 21)
+				ret, state_frame = self.video.read()
+				detected_state = self.detect_state_oog(state_frame)
+
 				self.video.set(1, self.cur_frame + 1)
-				cv2.imshow('prev', prev_frame)
-				cv2.imshow('next', next_frame)
-				print('state change')
+				self.state = STATE_LOADING
+			elif not is_loading and self.state == STATE_LOADING:
+				# Exiting loading state
+				# Attempt to detect in-game state
+				self.video.set(1, self.cur_frame + 19)
+				ret, state_frame = self.video.read()
+				detected_state = self.detect_state_ig(state_frame)
+
+				self.video.set(1, self.cur_frame + 1)
+				self.state = STATE_UNKNOWN
+			elif not is_loading and self.state != STATE_LOADING:
+				# Neutral state
+				pass
 
 			# Show video if debug flag set.
 			# Navigate video with arrows, space pauses, Q quits
@@ -154,56 +169,11 @@ class SmashVideo:
 			self.log(('Saved data', output_path), DEBUG_NOTICE)
 
 	@benchmark
-	def process_frame(self, src_im):
-		im_h, im_w, _x = src_im.shape
-		im_gray = cv2.cvtColor(src_im, cv2.COLOR_BGR2GRAY)
-		state = STATE_UNKNOWN
-
-		# Check for loading screen
-		black_amount = self.count_black(im_gray, 40)
-		if black_amount >= 0.75:
-			if len(self.cur_game['events']) > 0:
-				self.games.append(self.cur_game)
-				self.cur_game = {
-					'start': self.cur_time,
-					'fighters': {},
-					'events': []
-				}
-			state = STATE_LOADING
-		else:
-			state = STATE_UNKNOWN
-
+	def detect_loading(self, src_im):
+		black_amount = self.count_black(src_im, 40)
+		return (black_amount >= config["threshold"]["loading_black"])
 		
 		"""
-		# get best scale
-		if len(self.regions) < 2:
-			best_scale = 1.0
-			best_match = 0
-			best_match_coords = []
-
-			for i in np.arange(1.0 if self.template_scale == 0.0 else self.template_scale,
-					           0.25 if self.template_scale == 0.0 else self.template_scale, -0.05):
-				dest_shape = (int(im_w * i), int(im_h * i))
-				if dest_shape[0] >= tp_zero.shape[0] * 10 and dest_shape[1] >= tp_zero.shape[1] * 5:
-					im_scaled = cv2.resize(im_gray, dest_shape)
-					matches = cv2.matchTemplate(im_scaled, tp_zero, cv2.TM_CCOEFF_NORMED)
-					results = np.where(matches > 0.8)
-					if len(results[0]) > 0:
-						coords = np.int0(results[::-1] / i)
-						rounded = np.int0(coords / 20) * 20
-						_res, unique = np.unique(rounded[0], True)
-						conf = np.sum(matches[results][unique])
-						coords[1] = [min(coords[1])] * len(coords[1])
-						coords = zip(coords[0][unique], coords[1][unique])
-						if conf > best_match and len(coords) >= len(best_match_coords):
-							best_match = conf
-							best_match_coords = coords
-							best_scale = i
-
-			if len(best_match_coords) >= 2:
-				self.template_scale = best_scale
-				self.regions = best_match_coords
-
 		# iterate through ROIs
 		for i,(x,y) in enumerate(self.regions):
 			region_im = src_im[
@@ -237,7 +207,23 @@ class SmashVideo:
 				self.log((self.cur_frame, i, digits), 1)
 		"""
 
-		return state
+	@benchmark
+	def detect_state_oog(self, src_im):
+		matches, conf, scale = self.match_template(src_im, tpl_ssel)
+		if matches:
+			print(('stage', matches, conf))
+		else:
+			matches, conf, scale = self.match_template(src_im, tpl_csel)
+			if matches:
+				print(('char', matches, conf))
+		return STATE_UNKNOWN
+
+	@benchmark
+	def detect_state_ig(self, src_im):
+		matches, conf, scale = self.match_template(src_im, tpl_zero)
+		for (x, y) in matches:
+			print('match at %d,%d' % (x,y))
+		cv2.imshow('detect-state-ig', src_im)
 
 	@benchmark
 	def process_region(self, src_im, save_digits=False):
@@ -306,6 +292,42 @@ class SmashVideo:
 			dst_im[:,:,i] = im_ch
 		dst_im = cv2.cvtColor(dst_im, cv2.COLOR_BGR2GRAY)
 		return dst_im
+
+	@benchmark
+	def match_template(self, src_im, tpl_im, threshold=0.8, max_scale=1.0, min_scale=0.25, scale_step=0.05):
+		if len(src_im.shape) > 2:
+			src_im = cv2.cvtColor(src_im, cv2.COLOR_BGR2GRAY)
+
+		best_scale = max_scale
+		best_match = 0
+		best_match_coords = []
+
+		im_h, im_w = src_im.shape
+		for i in np.arange(max_scale, min_scale, -1 * scale_step):
+			dest_shape = (int(im_w * i), int(im_h * i))
+			if dest_shape[0] > tpl_im.shape[0] and dest_shape[1] > tpl_im.shape[1]:
+
+				im_scaled = cv2.resize(src_im, dest_shape)
+				cv2.imshow('pre',im_scaled)
+				cv2.imshow('t', tpl_im)
+				#cv2.waitKey(0)
+				matches = cv2.matchTemplate(im_scaled, tpl_im, cv2.TM_CCOEFF_NORMED)
+				results = np.where(matches > threshold)
+				if len(results[0]) > 0:
+					# filter results
+					coords = np.int0(results[::-1] / i)
+					rounded = np.int0(coords / 20) * 20 # group by nearest 20
+					_res, unique = np.unique(rounded[0], True)
+					conf = np.sum(matches[results][unique])
+					coords[1] = [min(coords[1])] * len(coords[1]) # reduce Y to min value of match
+					coords = list(zip(coords[0][unique], coords[1][unique]))
+
+					if conf > best_match and len(coords) >= len(best_match_coords):
+						best_match = conf
+						best_match_coords = coords
+						best_scale = i
+
+		return best_match_coords, best_match, best_scale
 
 #stats = SmashVideo('8uqAAppaCa4', debug_mode = 5)
 stats = SmashVideo('mtZiCgiqHWU', debug_mode = DEBUG_VIDEO | DEBUG_EVENTS | DEBUG_NOTICE)

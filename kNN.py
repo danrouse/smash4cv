@@ -30,9 +30,10 @@ class kNN:
 			rdata = rdata.reshape((rdata.size, 1))
 			self.model.train(sdata, cv2.ml.ROW_SAMPLE, rdata)
 
-			with open('%s/%s-tokens.data' % (config['path']['training'], name)) as f:
-				tdata = [line.rsplit('\n') for line in f.readlines()]
-				self.token_list = tdata
+			if tokens:
+				with open('%s/%s-tokens.data' % (config['path']['training'], name)) as f:
+					tdata = [line.rsplit('\n') for line in f.readlines()]
+					self.token_list = tdata
 
 	def identify(self, source, k=1):
 		if self.threshold > 0:

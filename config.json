@@ -6,6 +6,10 @@
 		"output":		"./output"
 	},
 
+	"threshold": {
+		"loading_black": 0.75
+	},
+
 	"knn":		{
 		"names":	{
 			"size":			[50, 7],
@@ -14,7 +18,7 @@
 		},
 		"digits":	{
 			"size":			[10, 20],
-			"tokens":		false,
+			"tokens":		true,
 			"threshold":	0,
 			"conf":			2200
 		}
