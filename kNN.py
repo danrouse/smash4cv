@@ -9,7 +9,6 @@ with open('config.json') as fp:
 class kNN:
 
 	def __init__(self, name, training=False, size=(10,10), tokens=True, threshold=0):
-		#self.model = cv2.ml.KNearest()
 		self.model = cv2.ml.KNearest_create()
 		self.name = name
 		self.token_list = []
@@ -94,9 +93,9 @@ class kNN:
 		self.sources = sources
 		self.responses = responses
 
-# if __name__ == '__main__':
-# 	knn_names = kNN('names', training=True)
-# 	knn_names.train()
+if __name__ == '__main__':
+	knn_names = kNN('names', training=True)
+	knn_names.train()
 
-# 	knn_digits = kNN('digits', training=True)
-# 	knn_digits.train()
+	knn_digits = kNN('digits', training=True)
+	knn_digits.train()
