@@ -16,13 +16,21 @@
 		"names":	{
 			"size":			[50, 7],
 			"tokens":		true,
-			"threshold":	0
+			"threshold":	0,
+			"contours":		false
 		},
 		"digits":	{
 			"size":			[10, 20],
 			"tokens":		true,
 			"threshold":	0,
+			"contours":		false,
 			"conf":			2200
+		},
+		"stages":	{
+			"size":			[50, 20],
+			"tokens":		true,
+			"threshold":	0,
+			"contours":		true
 		}
 	}
 }

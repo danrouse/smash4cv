@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+
 import scv_common as scv
 
 import youtube_dl

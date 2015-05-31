@@ -3,15 +3,14 @@
 A tool to extract meaningful information from videos of Super Smash Bros. for Wii U: players, fighters, and game events. smash4cv automatically extracts game stats (JSON) and highlight reels from each video.
 
 
-## Setup
+## Dependencies
 - Python 3.4
-- OpenCV 3.0rc1 (with contrib)
+- OpenCV 3.0-rc1 (with contrib)
 - youtube_dl
+- numpy
 
 ## Usage
-*** Not yet implemented. ***
-
-- Add videos to the download/processing queue
+- Download videos
 	
 	- `scv-download.py --id=8uqAAppaCa4`
 	- `scv-download.py --user=VideoGameBootCamp --filter=[Vv][Ss].+[sS]mash\s*4`
@@ -25,7 +24,10 @@ A tool to extract meaningful information from videos of Super Smash Bros. for Wi
 ## Configuration
 Values in [config.json](config.json) can be modified to achieve better detection results.
 
-## Training
+## Development
+This software has been built on Ubuntu 15.04, but should run on other systems - granted you can get OpenCV 3.0 compiled for Python 3.
+
+### Training
 
 This program uses two methods of region detection:
 
@@ -33,5 +35,5 @@ This program uses two methods of region detection:
 
 	- *KNearest* (`kNN.kNN` < `cv2.ml.KNearest`) detects in-game state: names, digits, and stages.
 
-## Roadmap and Known Issues
+### Roadmap and Known Issues
 - Doesn't work with all Smash streamers. Need to be able to detect from any video layout with minimal tweaking.
