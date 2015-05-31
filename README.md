@@ -9,6 +9,8 @@ A tool to extract meaningful information from videos of Super Smash Bros. for Wi
 - youtube_dl
 
 ## Usage
+*** Not yet implemented. ***
+
 - Add videos to the download/processing queue
 	
 	- `scv-download.py --id=8uqAAppaCa4`

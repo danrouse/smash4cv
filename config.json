@@ -7,7 +7,9 @@
 	},
 
 	"threshold": {
-		"loading_black": 0.75
+		"loading_black":	0.75,
+		"dead_black_low":	0.045,
+		"dead_black_high":	0.90
 	},
 
 	"knn":		{
