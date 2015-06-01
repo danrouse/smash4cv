@@ -15,7 +15,6 @@ import argparse
 # TODO: Add support for processing multiple videos at once
 parser = argparse.ArgumentParser()
 parser.add_argument('--video_id', help='Basename of input video', default='nCte6rhdAqs')
-args = parser.parse_args()
 
 tpl_zero = cv2.imread('%s/zero-percent-color-small.png' % scv.config['path']['templates'], 0)
 tpl_percent = cv2.imread('%s/percent-sign.png' % scv.config['path']['templates'], 0)
@@ -25,6 +24,14 @@ tpl_ssel = cv2.imread('%s/stage-select.png' % scv.config['path']['templates'], 0
 knn_names = knearest.kNN('names')
 knn_digits = knearest.kNN('digits')
 knn_stages = knearest.kNN('stages')
+
+class SmashGame:
+	def __init__(self, start=0):
+		self.fighters = {}
+		self.hits = []
+		self.deaths = []
+		self.stage = 'Unknown'
+		self.start = start
 
 class SmashVideo:
 	def __init__(self, video_id, params = {}, debug_level = scv.DEBUG_NONE):
@@ -42,12 +49,7 @@ class SmashVideo:
 		self.paused = False
 
 		self.games = []
-		self.cur_game = {
-			'fighters': {},
-			'hits': [],
-			'stage': 'Unknown',
-			'start': 0
-		}
+		self.cur_game = SmashGame()
 
 		self.video_id = video_id
 		self.video = cv2.VideoCapture('%s/%s.mp4' % (scv.config['path']['videos'], video_id))
@@ -93,14 +95,6 @@ class SmashVideo:
 				elif key == 65363: # right arrow
 					self.paused = True
 
-		output_path = '%s/%s.json' % (scv.config['path']['output'], self.video_id)
-		with open(output_path, 'w') as fp:
-			if len(self.cur_game['hits']) > 0:
-				# flush cached game
-				self.games.append(self.cur_game)
-			json.dump(self.games, fp)
-			scv.log('Saved JSON data to %s' % output_path)
-
 	@scv.benchmark
 	def detect_state(self, src_im):
 		state = scv.State.unknown
@@ -114,16 +108,11 @@ class SmashVideo:
 				# Entering loading state
 				if self.state == scv.State.ingame:
 					# Save any previously detected game
-					if len(self.cur_game['hits']) > 0:
+					if len(self.cur_game.hits) > 0:
 						self.games.append(self.cur_game)
 
 					# Reset game state
-					self.cur_game = {
-						'fighters': {},
-						'hits': [],
-						'stage': 'Unknown',
-						'start': self.cur_time
-					}
+					self.cur_game = SmashGame(start=self.cur_time)
 
 				# Attempt to detect out-of-game state data from recent frame
 				self.video.set(1, self.cur_frame - 21)
@@ -170,18 +159,19 @@ class SmashVideo:
 					region_im = cv2.resize(region_im, (100, 50))
 
 					# Detect name if no good match yet
-					if i not in self.cur_game['fighters']:
-						name_im = region_im[40:50, 0:64]
+					if i not in self.cur_game.fighters:
+						name_im = region_im[40:50, 0:67]
 						name_im = cv2.cvtColor(name_im, cv2.COLOR_BGR2GRAY)
+						cv2.imshow('name', name_im)
 
 						name, _res, name_conf = knn_names.identify(name_im)
 						if name_conf <= 2000:
 							scv.log(('Detected fighter', i, name), scv.DEBUG_DETECT)
-							self.cur_game['fighters'][i] = name
+							self.cur_game.fighters[i] = name
 
 					# Detect digits and compare
 					digits_im = region_im[10:40, 30:100]
-					digits = self.detect_digits(digits_im)
+					digits = self.read_digits(digits_im)
 					
 					# Death must be detected continously for 15 frames to trigger
 					if digits == scv.DETECT_DEAD:
@@ -193,9 +183,13 @@ class SmashVideo:
 					if digits > scv.DETECT_UNKNOWN and digits != self.digit_cache[i]:
 						if digits != scv.DETECT_DEAD:
 							self.death_cache[i] = 0
+							self.cur_game.hits.append((self.cur_time, i, digits))
+							scv.log((self.cur_frame, self.cur_game.fighters[i] if i in self.cur_game.fighters else 'Fighter %d/%d' % (i, len(self.regions)), '%d%%' % digits), scv.DEBUG_EVENTS)
+						else:
+							self.cur_game.deaths.append((self.cur_time, i))
+							scv.log((self.cur_frame, self.cur_game.fighters[i] if i in self.cur_game.fighters else 'Fighter %d/%d' % (i, len(self.regions)), 'died'), scv.DEBUG_EVENTS)
 						self.digit_cache[i] = digits
-						self.cur_game['hits'].append((self.cur_time, i, digits))
-						scv.log((self.cur_frame, self.cur_game['fighters'][i] if i in self.cur_game['fighters'] else 'Fighter %d' % i, '%d%%' % digits), scv.DEBUG_EVENTS)
+						
 
 					# Show ROIs while debugging
 					if scv.debug_level & scv.DEBUG_VIDEO:
@@ -219,7 +213,7 @@ class SmashVideo:
 			im_cropped = im_gray[0:im_h, 0:int(im_w/2)]
 			stage, _res, conf = knn_stages.identify(im_cropped)
 
-			self.cur_game['stage'] = stage
+			self.cur_game.stage = stage
 			scv.log((self.cur_frame, 'Entering stage', stage), scv.DEBUG_EVENTS)
 		else:
 			# TODO: Possibly do something with character selection page?
@@ -238,7 +232,7 @@ class SmashVideo:
 		return matches, scale
 
 	#@scv.benchmark
-	def detect_digits(self, src_im, save_to_file=False):
+	def read_digits(self, src_im, save_to_file=False):
 		im_red = self.extract_channel(src_im, 2)
 
 		# Find %-sign
@@ -345,5 +339,17 @@ class SmashVideo:
 
 		return best_coords, best_conf, best_scale
 
-stats = SmashVideo(args.video_id, debug_level = scv.DEBUG_ALL ^ scv.DEBUG_PERF)
-stats.process_video()
+	def save(self):
+		output_path = '%s/%s.json' % (scv.config['path']['output'], self.video_id)
+		with open(output_path, 'w') as fp:
+			if len(self.cur_game.hits) > 0:
+				# flush cached game
+				self.games.append(self.cur_game)
+			json.dump([game.__dict__ for game in self.games], fp)
+			scv.log('Saved JSON data to %s' % output_path)
+
+if __name__ == '__main__':
+	args = parser.parse_args()
+	stats = SmashVideo(args.video_id, debug_level = scv.DEBUG_ALL ^ scv.DEBUG_PERF)
+	stats.process_video()
+	stats.save()

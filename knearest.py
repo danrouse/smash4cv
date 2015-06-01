@@ -1,39 +1,41 @@
+#!/usr/bin/python3
+
+import scv_common as scv
+
 import cv2
 import numpy as np
-import json
 from glob import glob
 
-with open('config.json') as fp:
-	config = json.load(fp)
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--train', dest='model', help='Model to train', nargs='+', default='none')
+parser.add_argument('--list', help='List available models', action='store_true')
 
 class kNN:
-
-	def __init__(self, name, training=False, size=(10,10), tokens=True, threshold=0, contours=False):
+	def __init__(self, name, training=False):
 		self.model = cv2.ml.KNearest_create()
 		self.name = name
 		self.token_list = []
 
-		if name in config['knn']:
-			self.tokens = config['knn'][name]['tokens']
-			self.size = tuple(config['knn'][name]['size'])
-			self.threshold = config['knn'][name]['threshold']
-			self.find_contours = config['knn'][name]['contours']
+		if name in scv.config['knn']:
+			self.tokens = scv.config['knn'][name]['tokens']
+			self.size = tuple(scv.config['knn'][name]['size'])
+			self.threshold = scv.config['knn'][name]['threshold']
+			self.find_contours = scv.config['knn'][name]['contours']
 		else:
-			self.tokens = tokens
-			self.size = size
-			self.threshold = threshold
-			self.find_contours = contours
+			raise ValueError('Model not found')
 
 		if training:
 			self.load_sources()
 		else:
-			sdata = np.loadtxt('%s/%s-samples.data' % (config['path']['training'], name), np.float32)
-			rdata = np.loadtxt('%s/%s-responses.data' % (config['path']['training'], name), np.float32)
+			sdata = np.loadtxt('%s/%s-samples.data' % (scv.config['path']['training'], name), np.float32)
+			rdata = np.loadtxt('%s/%s-responses.data' % (scv.config['path']['training'], name), np.float32)
 			rdata = rdata.reshape((rdata.size, 1))
 			self.model.train(sdata, cv2.ml.ROW_SAMPLE, rdata)
 
-			if tokens:
-				with open('%s/%s-tokens.data' % (config['path']['training'], name)) as f:
+			if self.tokens:
+				with open('%s/%s-tokens.data' % (scv.config['path']['training'], name)) as f:
 					tdata = [line.rsplit('\n') for line in f.readlines()]
 					self.token_list = tdata
 
@@ -45,9 +47,6 @@ class kNN:
 
 		if self.threshold > 0:
 			_res, source = cv2.threshold(source, self.threshold, 255, cv2.THRESH_BINARY)
-
-		# cv2.imshow('ident', source)
-		# cv2.waitKey(1)
 
 		matrix = source.reshape((1, self.size[0] * self.size[1]))
 		matrix = np.float32(matrix)
@@ -81,17 +80,21 @@ class kNN:
 			samples = np.append(samples, sample, 0)
 
 		if self.tokens:
-			np.savetxt('%s/%s-tokens.data' % (config['path']['training'], self.name), responses, '%s')
+			np.savetxt('%s/%s-tokens.data' % (scv.config['path']['training'], self.name), responses, '%s')
 			responses = range(0, len(responses))
+			print('Wrote tokens to %s/%s-tokens.data' % (scv.config['path']['training'], self.name))
 
 		responses = np.array(responses, np.float32)
 		responses = responses.reshape((responses.size, 1))
-		np.savetxt('%s/%s-samples.data' % (config['path']['training'], self.name), samples, '%d')
-		np.savetxt('%s/%s-responses.data' % (config['path']['training'], self.name), responses, '%d')
+		np.savetxt('%s/%s-samples.data' % (scv.config['path']['training'], self.name), samples, '%d')
+		np.savetxt('%s/%s-responses.data' % (scv.config['path']['training'], self.name), responses, '%d')
+
+		print('Wrote samples to %s/%s-samples.data' % (scv.config['path']['training'], self.name))
+		print('Wrote responses to %s/%s-responses.data' % (scv.config['path']['training'], self.name))
 
 
 	def load_sources(self, ext='.png'):
-		path = '%s/%s/*%s' % (config['path']['training'], self.name, ext)
+		path = '%s/%s/*%s' % (scv.config['path']['training'], self.name, ext)
 		sources = []
 		responses = []
 		for f in glob(path):
@@ -123,11 +126,17 @@ class kNN:
 			largest_bbox[0]:largest_bbox[0]+largest_bbox[2]]
 
 if __name__ == '__main__':
-	knn_names = kNN('names', training=True)
-	knn_names.train()
-
-	# knn_digits = kNN('digits', training=True)
-	# knn_digits.train()
-
-	knn_stages = kNN('stages', training=True)
-	knn_stages.train()
+	args = parser.parse_args()
+	if args.list:
+		print('Available models:')
+		for i in scv.config['knn'].keys():
+			print('\t%s' % i)
+	else:
+		for i in args.model:
+			if i == 'all':
+				for j in scv.config['knn'].keys():
+					model = kNN(j, training=True)
+					model.train()
+			else:
+				model = kNN(i, training=True)
+				model.train()

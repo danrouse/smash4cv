@@ -19,7 +19,7 @@ def download_video(yt_id):
 			format = '134/135/mp4[acodec=none]',
 			outtmpl = '%s/%s.mp4' % (scv.config['path']['videos'], '%(id)s'))
 		with youtube_dl.YoutubeDL(yt_opts) as ytdl:
-			return ytdl.download(['https://www.youtube.com/watch?v=%s' % yt_id])
+			return ytdl.download([yt_id])
 	else:
 		scv.log('Video already exists, skipping: %s' % yt_id, scv.DEBUG_NOTICE)
 
