@@ -14,7 +14,8 @@ import argparse
 
 # TODO: Add support for processing multiple videos at once
 parser = argparse.ArgumentParser()
-parser.add_argument('--video_id', help='Basename of input video', default='nCte6rhdAqs')
+#parser.add_argument('--video_id', help='Basename of input video', default='HEu4P2ope2I')
+parser.add_argument('--video_id', help='Basename of input video', default='8uqAAppaCa4')
 
 tpl_zero = cv2.imread('%s/zero-percent-color-small.png' % scv.config['path']['templates'], 0)
 tpl_percent = cv2.imread('%s/percent-sign.png' % scv.config['path']['templates'], 0)
@@ -30,11 +31,13 @@ class SmashGame:
 		self.fighters = {}
 		self.hits = []
 		self.deaths = []
+		self.combos = []
 		self.stage = 'Unknown'
 		self.start = start
+		self.winner = -1
 
 class SmashVideo:
-	def __init__(self, video_id, params = {}, debug_level = scv.DEBUG_NONE):
+	def __init__(self, video_id, params = {}, debug_level = scv.DEBUG_NOTICE):
 		scv.debug_level = debug_level
 
 		# Video processing state
@@ -99,36 +102,91 @@ class SmashVideo:
 	def detect_state(self, src_im):
 		state = scv.State.unknown
 
-		im_gray = cv2.cvtColor(src_im, cv2.COLOR_BGR2GRAY)
-		im_h, im_w = im_gray.shape
-		is_loading = self.detect_state_loading(im_gray)
+		unknown_regions = 0
+		if self.state == scv.State.ingame:
+			# Continued in-game state
+			for i,(x,y) in enumerate(self.regions):
+				# Extract ROI
+				x1 = int(x - (self.template_scale * 73))
+				x2 = int(x + (self.template_scale * 75))
+				y1 = int(y - (self.template_scale * 10))
+				y2 = int(y + (self.template_scale * 61))
+				region_im = src_im[y1:y2,x1:x2]
 
-		if is_loading:
-			if self.state != scv.State.loading:
-				# Entering loading state
-				if self.state == scv.State.ingame:
-					# Save any previously detected game
-					if len(self.cur_game.hits) > 0:
-						self.games.append(self.cur_game)
+				region_im = cv2.resize(region_im, (100, 50))
 
-					# Reset game state
-					self.cur_game = SmashGame(start=self.cur_time)
+				# Detect name if no good match yet
+				if i not in self.cur_game.fighters:
+					name_im = region_im[40:50, 0:67]
+					name_im = cv2.cvtColor(name_im, cv2.COLOR_BGR2GRAY)
+					cv2.imshow('name', name_im)
 
-				# Attempt to detect out-of-game state data from recent frame
-				self.video.set(1, self.cur_frame - 21)
-				ret, state_im = self.video.read()
-				detected_state = self.detect_state_oog(state_im)
+					name, _res, name_conf = knn_names.identify(name_im)
+					if name_conf <= 2000:
+						scv.log(('Detected fighter', i, name), scv.DEBUG_DETECT)
+						self.cur_game.fighters[i] = name
 
-				# Reset video to original position
-				self.video.set(1, self.cur_frame + 1)
+				# Detect digits and compare
+				digits_im = region_im[10:40, 30:100]
+				digits = self.read_digits(digits_im)
+				
+				# Death must be detected continously for 15 frames to trigger
+				if digits == scv.DETECT_DEAD:
+					self.death_cache[i] -= 1
+					if self.death_cache[i] > -15:
+						digits = scv.DETECT_UNKNOWN
 
-			else:
-				# In the middle of loading state
-				pass
+				# Add event when changed
+				if digits > scv.DETECT_UNKNOWN and digits != self.digit_cache[i]:
+					if digits != scv.DETECT_DEAD:
+						self.death_cache[i] = 0
+						self.cur_game.hits.append((self.cur_time, i, digits))
+						scv.log((self.cur_frame, self.cur_game.fighters[i] if i in self.cur_game.fighters else 'Fighter %d/%d' % (i, len(self.regions)), '%d%%' % digits), scv.DEBUG_EVENTS)
+					else:
+						self.cur_game.deaths.append((self.cur_time, i))
+						scv.log((self.cur_frame, self.cur_game.fighters[i] if i in self.cur_game.fighters else 'Fighter %d/%d' % (i, len(self.regions)), 'died'), scv.DEBUG_EVENTS)
+					self.digit_cache[i] = digits
+				
+				if digits == scv.DETECT_UNKNOWN:
+					unknown_regions += 1
 
-			state = scv.State.loading
-		else:
-			if self.state == scv.State.loading:
+				# Show ROIs while debugging
+				if scv.debug_level & scv.DEBUG_VIDEO:
+					cv2.circle(src_im, (x, y), 4, (0, 255, 0), 2)
+					cv2.rectangle(src_im, (x1, y1), (x2, y2), (0, 0, 255), 1)
+			
+			state = scv.State.ingame
+
+		if state != scv.State.ingame or unknown_regions == len(self.regions):
+			im_gray = cv2.cvtColor(src_im, cv2.COLOR_BGR2GRAY)
+			im_h, im_w = im_gray.shape
+			is_loading = self.detect_state_loading(im_gray)
+
+			if is_loading:
+				if self.state != scv.State.loading:
+					# Entering loading state
+					if self.state == scv.State.ingame:
+						# Save any previously detected game
+						if len(self.cur_game.hits) > 0:
+							self.games.append(self.cur_game)
+
+						# Reset game state
+						self.cur_game = SmashGame(start=self.cur_time)
+
+					# Attempt to detect out-of-game state data from recent frame
+					self.video.set(1, self.cur_frame - 21)
+					ret, state_im = self.video.read()
+					detected_state = self.detect_state_oog(state_im)
+
+					# Reset video to original position
+					self.video.set(1, self.cur_frame + 1)
+
+				else:
+					# In the middle of loading state
+					pass
+
+				state = scv.State.loading
+			elif self.state == scv.State.loading or self.state == scv.State.unknown:
 				# Exiting loading state
 				# Attempt to detect an in-game state in coming frame
 				self.video.set(1, self.cur_frame + 29)
@@ -146,68 +204,16 @@ class SmashVideo:
 				# Reset video to original position
 				self.video.set(1, self.cur_frame + 1)
 
-			elif self.state == scv.State.ingame:
-				# Continued in-game state
-				for i,(x,y) in enumerate(self.regions):
-					# Extract ROI
-					x1 = int(x - (self.template_scale * 65))
-					x2 = int(x + (self.template_scale * 70))
-					y1 = int(y - (self.template_scale * 10))
-					y2 = int(y + (self.template_scale * 58))
-					region_im = src_im[y1:y2,x1:x2]
-
-					region_im = cv2.resize(region_im, (100, 50))
-
-					# Detect name if no good match yet
-					if i not in self.cur_game.fighters:
-						name_im = region_im[40:50, 0:67]
-						name_im = cv2.cvtColor(name_im, cv2.COLOR_BGR2GRAY)
-						cv2.imshow('name', name_im)
-
-						name, _res, name_conf = knn_names.identify(name_im)
-						if name_conf <= 2000:
-							scv.log(('Detected fighter', i, name), scv.DEBUG_DETECT)
-							self.cur_game.fighters[i] = name
-
-					# Detect digits and compare
-					digits_im = region_im[10:40, 30:100]
-					digits = self.read_digits(digits_im)
-					
-					# Death must be detected continously for 15 frames to trigger
-					if digits == scv.DETECT_DEAD:
-						self.death_cache[i] -= 1
-						if self.death_cache[i] > -15:
-							digits = scv.DETECT_UNKNOWN
-
-					# Add event when changed
-					if digits > scv.DETECT_UNKNOWN and digits != self.digit_cache[i]:
-						if digits != scv.DETECT_DEAD:
-							self.death_cache[i] = 0
-							self.cur_game.hits.append((self.cur_time, i, digits))
-							scv.log((self.cur_frame, self.cur_game.fighters[i] if i in self.cur_game.fighters else 'Fighter %d/%d' % (i, len(self.regions)), '%d%%' % digits), scv.DEBUG_EVENTS)
-						else:
-							self.cur_game.deaths.append((self.cur_time, i))
-							scv.log((self.cur_frame, self.cur_game.fighters[i] if i in self.cur_game.fighters else 'Fighter %d/%d' % (i, len(self.regions)), 'died'), scv.DEBUG_EVENTS)
-						self.digit_cache[i] = digits
-						
-
-					# Show ROIs while debugging
-					if scv.debug_level & scv.DEBUG_VIDEO:
-						cv2.circle(src_im, (x, y), 4, (0, 255, 0), 2)
-						cv2.rectangle(src_im, (x1, y1), (x2, y2), (0, 0, 255), 1)
-				
-				state = scv.State.ingame
-
 		return state
 
 	def detect_state_loading(self, src_im):
-		black_amount = self.count_black(src_im, 40)
+		black_amount = self.count_black(src_im, 20)
 		return (black_amount >= scv.config["threshold"]["loading_black"])
 
-	#@scv.benchmark
+	@scv.benchmark
 	def detect_state_oog(self, src_im):
 		im_gray = cv2.cvtColor(src_im, cv2.COLOR_BGR2GRAY)
-		matches, conf, scale = self.match_template(im_gray, tpl_ssel)
+		matches, conf, scale = self.match_template(im_gray, tpl_ssel, threshold=0.7)
 		if matches:
 			im_h, im_w = im_gray.shape
 			im_cropped = im_gray[0:im_h, 0:int(im_w/2)]
@@ -225,7 +231,7 @@ class SmashVideo:
 
 		return scv.State.unknown
 
-	#@scv.benchmark
+	@scv.benchmark
 	def detect_state_ig(self, src_im):
 		# Find '0%' positions
 		matches, conf, scale = self.match_template(src_im, tpl_zero)
@@ -315,6 +321,7 @@ class SmashVideo:
 			dest_shape = (int(im_w * i), int(im_h * i))
 			if dest_shape[0] > tpl_im.shape[0] and dest_shape[1] > tpl_im.shape[1]:
 				im_scaled = cv2.resize(im_gray, dest_shape)
+
 				matches = cv2.matchTemplate(im_scaled, tpl_im, cv2.TM_CCOEFF_NORMED)
 				results = np.where(matches > threshold)
 				if len(results[0]) > 0:
@@ -327,7 +334,7 @@ class SmashVideo:
 
 					conf = np.mean(matches[results][unique])
 
-					print(coords, rounded, unique, conf)
+					#print(coords, rounded, unique, conf)
 
 					if conf > best_conf:
 						best_conf = conf
@@ -339,17 +346,92 @@ class SmashVideo:
 
 		return best_coords, best_conf, best_scale
 
+	def process_game_data(self):
+		for game in self.games:
+			# last person dead is the winner:
+			#   they get detected as dead when the game ends, after their defeated foe.
+			if len(game.deaths) > 0:
+				game.winner = game.deaths.pop()
+
+			# combos: N hits in a row
+			combo_counter = 0
+			combo_victim = -1
+			combo_start_time = 0
+			combo_start_hp = 0
+			combo_last_hp = 0
+			for hit in game.hits:
+				# hit(time, victim, digits)
+				if hit[1] != combo_victim:
+					# record combos above threshold
+					if combo_counter >= scv.config['threshold']['hits_for_combo']:
+						game.combos.append((combo_start_time, hit[0], combo_victim, combo_counter, combo_start_hp, combo_last_hp))
+
+					# reset combo
+					combo_counter = 0
+					combo_victim = hit[1]
+					combo_start_time = hit[0]
+					combo_start_hp = hit[2]
+				else:
+					combo_counter += 1
+					combo_last_hp = hit[2]
+
+	def save_highlights(self):
+		i = 0
+		fps = int(self.video.get(5))
+		fourcc = cv2.VideoWriter_fourcc(*'XVID')
+		size = (int(self.video.get(3)), int(self.video.get(4)))
+		videos = []
+
+		for game in self.games:
+			# save kills
+			for death in game.deaths:
+				patient = death[1]
+				agent = int(not patient) # this won't support more than two players
+
+				i += 1
+				video_path = '%s/ko-%s-%s-%s-%d.avi' % (
+					scv.config['path']['output'],
+					game.fighters[agent],
+					game.fighters[patient], self.video_id, i)
+				videos.append((video_path, death[0] - 5000, death[0] + 1000))
+
+			# save combos
+			for combo in game.combos:
+				patient = combo[2]
+				agent = int(not patient) # this won't support more than two players
+
+				i += 1
+				video_path = '%s/combo-%s-%s-%s-%d.avi' % (
+					scv.config['path']['output'],
+					game.fighters[agent],
+					game.fighters[patient], self.video_id, i)
+				videos.append((video_path, combo[0] - 1000, combo[1] + 250))
+
+			# save videos
+			for i,video in enumerate(videos):
+				scv.log(('Saving video', i, video[0]))
+				writer = cv2.VideoWriter(video[0], fourcc, fps, size)
+				self.video.set(0, video[1])
+				while self.video.get(0) < video[2]:
+					ret, frame = self.video.read()
+					writer.write(frame)
+				writer.release()
+
 	def save(self):
+		# flush cached game
+		if len(self.cur_game.hits) > 0:
+			self.games.append(self.cur_game)
+
+		self.process_game_data()
+		self.save_highlights()
 		output_path = '%s/%s.json' % (scv.config['path']['output'], self.video_id)
 		with open(output_path, 'w') as fp:
-			if len(self.cur_game.hits) > 0:
-				# flush cached game
-				self.games.append(self.cur_game)
+			
 			json.dump([game.__dict__ for game in self.games], fp)
 			scv.log('Saved JSON data to %s' % output_path)
 
 if __name__ == '__main__':
 	args = parser.parse_args()
-	stats = SmashVideo(args.video_id, debug_level = scv.DEBUG_ALL ^ scv.DEBUG_PERF)
+	stats = SmashVideo(args.video_id)
 	stats.process_video()
 	stats.save()

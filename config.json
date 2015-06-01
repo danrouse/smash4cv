@@ -7,9 +7,10 @@
 	},
 
 	"threshold": {
-		"loading_black":	0.75,
+		"loading_black":	0.7,
 		"dead_black_low":	0.045,
-		"dead_black_high":	0.90
+		"dead_black_high":	0.90,
+		"hits_for_combo":	6
 	},
 
 	"knn":		{
@@ -24,7 +25,7 @@
 			"tokens":		true,
 			"threshold":	0,
 			"contours":		false,
-			"conf":			2200
+			"conf":			2000
 		},
 		"stages":	{
 			"size":			[50, 20],
