@@ -150,10 +150,10 @@ class SmashVideo:
 				# Continued in-game state
 				for i,(x,y) in enumerate(self.regions):
 					# Extract ROI
-					x1 = int(x - ((im_w * self.template_scale)/13))
-					x2 = int(x + ((im_w * self.template_scale)/11.9))
-					y1 = int(y - ((im_h * self.template_scale)/51))
-					y2 = int(y + ((im_h * self.template_scale)/8))
+					x1 = int(x - (self.template_scale * 65))
+					x2 = int(x + (self.template_scale * 70))
+					y1 = int(y - (self.template_scale * 10))
+					y2 = int(y + (self.template_scale * 58))
 					region_im = src_im[y1:y2,x1:x2]
 
 					region_im = cv2.resize(region_im, (100, 50))
